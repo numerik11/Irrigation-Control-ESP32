@@ -167,25 +167,26 @@ Free OpenWeatherMap API key → https://home.openweathermap.org/users/sign_up
 
 -Main Page
 
-<img width="857" height="911" alt="image" src="https://github.com/user-attachments/assets/0c6ffd53-ccf9-4319-8f37-d1f467905f05" />
+<img width="870" height="939" alt="image" src="https://github.com/user-attachments/assets/067be7c3-5128-4438-ae53-19e2e26ac221" />
 
 -Schedules 
 
-<img width="846" height="747" alt="image" src="https://github.com/user-attachments/assets/145b160c-50ac-4ff5-b3f4-28608ebaee5c" />
+<img width="839" height="722" alt="image" src="https://github.com/user-attachments/assets/d144b3e7-fb4d-49d1-aa05-a41db55fa3db" />
 
 -Setup Page
 
-<img width="615" height="902" alt="image" src="https://github.com/user-attachments/assets/0199fd7a-4d08-4c7c-afe6-8b436df439be" />
+<img width="668" height="927" alt="image" src="https://github.com/user-attachments/assets/2e1d70d2-2b90-4653-ad96-ec830ee5e985" />
 
 -GPIO/Timezone/MQTT Page
-<img width="851" height="202" alt="image" src="https://github.com/user-attachments/assets/63a707df-82df-4f1c-954a-d3d07144e553" />
 
-<img width="709" height="904" alt="image" src="https://github.com/user-attachments/assets/8630a990-62da-4bb1-95f8-b5ed7bf90363" />
+<img width="663" height="925" alt="image" src="https://github.com/user-attachments/assets/3f734430-b14d-4861-992b-66c234913597" />
+<img width="666" height="259" alt="image" src="https://github.com/user-attachments/assets/61ba1308-9258-4ffe-a550-2ea1b438b1ee" />
 
 -KC868-A6 Wiring
 
 <img width="791" height="754" alt="Screenshot 2025-07-25 233726" src="https://github.com/user-attachments/assets/f601fb06-e70c-4fc6-a7f3-5fdf410b4e73" />
 
 -Wemos R32 w/ 6 Relay module 24vac
+
 ![PXL_20251222_121735203~2](https://github.com/user-attachments/assets/d0dc6ca8-cdca-4920-9006-1908e681a619)
 
