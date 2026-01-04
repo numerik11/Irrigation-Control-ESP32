@@ -102,11 +102,11 @@ Free OpenWeatherMap API key → https://home.openweathermap.org/users/sign_up
    ***Tools → Partition Scheme: Large APP (4MB).****
    
 4. **(KC868-A6) PCF8574 Library**  
-   Download Kincony PCF8574 zip: <https://www.kincony.com/forum/attachment.php?aid=1697>  
+   Download Kincony PCF8574 Library .zip: <https://www.kincony.com/forum/attachment.php?aid=1697>  
    *Sketch → Include Library → Add .ZIP Library…*
 
 5. **Upload**  
-   Open the  esp32irrigation.ino sketch and click **Upload**.
+   Open the esp32irrigation.ino sketch and click **Upload**.
 
 6. **First-Run Wi-Fi**  
    Serial Monitor @ 115200. Connect to **ESPIrrigationAP** (captive portal),  
