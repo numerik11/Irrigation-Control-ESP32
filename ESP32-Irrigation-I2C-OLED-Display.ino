@@ -460,8 +460,8 @@ static void mdnsStart() {
 
 // ---------- GPIO fallback helpers ----------
 inline int gpioLevel(bool on) {
-  // on = true → valve ON
-  // on = false → valve OFF
+  // on = true -> valve ON
+  // on = false -> valve OFF
   if (gpioActiveLow) {
     // Active-LOW: LOW = ON, HIGH = OFF
     return on ? LOW : HIGH;
@@ -528,7 +528,7 @@ void setup() {
 
   // LittleFS
   if (!LittleFS.begin()) {
-    Serial.println("LittleFS mount failed; formatting…");
+    Serial.println("LittleFS mount failed; formatting...");
     if (!(LittleFS.format() && LittleFS.begin())) {
       Serial.println("LittleFS unavailable; halt.");
       while (true) delay(1000);
@@ -798,7 +798,7 @@ void setup() {
     server.send(200,"text/plain","Backlight toggled");
   });
 
-  // I²C tools
+  // I2C tools
   server.on("/i2c-test", HTTP_GET, [](){
     HttpScope _scope;
     if (useGpioFallback) { server.send(500,"text/plain","Fallback active"); return; }
@@ -998,7 +998,7 @@ void loop() {
 // ---------- Connectivity / I2C health ----------
 void wifiCheck() {
   if (WiFi.status()!=WL_CONNECTED) {
-    Serial.println("Reconnecting WiFi…");
+    Serial.println("Reconnecting WiFi...");
     WiFi.disconnect(); delay(600);
     if (!wifiManager.autoConnect("ESPIrrigationAP")) Serial.println("Reconnection failed.");
     else {
@@ -1018,7 +1018,7 @@ void checkI2CHealth() {
   if (anyErr) {
     i2cFailCount++;
     if (i2cFailCount >= I2C_HEALTH_DEBOUNCE) {
-      Serial.println("I2C unstable → GPIO fallback");
+      Serial.println("I2C unstable -> GPIO fallback");
       useGpioFallback = true; initGpioFallback();
     }
   } else i2cFailCount = 0;
@@ -1542,8 +1542,11 @@ void HomeScreen() {
   display.setCursor(66,3); display.print( (t->tm_isdst>0) ? "DST" : "STD" );
 
   display.setCursor(0,20);
-  if (!isnan(temp) && hum>=0) display.printf("T:%2.0fC H:%02d%%", temp, hum);
-  else display.print("T:-- H:--");
+  if (!isnan(temp) && hum >= 0) {
+    display.printf("T:%2.0fC H:%02d%%", temp, hum);
+  } else {
+    display.print("T:-- H:--");
+  }
 
   display.setCursor(0,32);
   if (zonesCount==4) { display.printf("Tank:%3d%% ", pct); display.print(isTankLow()? "(Mains)":"(Tank)"); }
@@ -1886,7 +1889,7 @@ void handleRoot() {
   strftime(timeStr, sizeof(timeStr), "%H:%M:%S", ti);
   strftime(dateStr, sizeof(dateStr), "%d/%m/%Y", ti);
 
-  // Keep this – it respects the g_inHttp guard
+  // Keep this - it respects the g_inHttp guard
   updateCachedWeather();
   DynamicJsonDocument js(1024);
   DeserializationError werr = deserializeJson(js, cachedWeatherData);
@@ -1913,7 +1916,7 @@ void handleRoot() {
   html += F("<meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>");
   html += F("<title>ESP32 Irrigation</title>");
   html += F("<style>");
-  html += F(".center{max-width:1120px;margin:0 auto}");
+  html += F(".center{max-width:1280px;margin:0 auto}");
   html += F(":root[data-theme='light']{--bg:#ecf1f8;--bg2:#f6f8fc;--glass:rgba(255,255,255,.55);--glass-brd:rgba(140,158,190,.35);--panel:#fff;--line:#d5dfef;");
   html += F("--card:#ffffff;--ink:#0f172a;--muted:#667084;--primary:#1c74d9;--primary-2:#1160b6;--ok:#16a34a;--warn:#d97706;--bad:#dc2626;");
   html += F("--chip:#eef4ff;--chip-brd:#cfe1ff;--ring:#dfe8fb;--ring2:#a4c6ff;--shadow:0 18px 40px rgba(19,33,68,.15)}");
@@ -1924,85 +1927,103 @@ void handleRoot() {
   html += F("background:radial-gradient(1200px 600px at 10% -5%,var(--bg2),transparent),");
   html += F("radial-gradient(1200px 700px at 100% 0%,var(--ring),transparent),");
   html += F("radial-gradient(900px 500px at -10% 80%,var(--ring2),transparent),var(--bg);");
-  html += F("color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif}");
+  html += F("color:var(--ink);font-family:'Trebuchet MS','Candara','Segoe UI',sans-serif}");
+  html += F(":root{--gap:16px;--pad:18px;--pad-lg:22px;--radius:20px;--radius-sm:16px;}");
 
-  // Top nav – made a bit tighter on mobiles
-  html += F(".nav{position:sticky;top:0;z-index:10;padding:8px 10px 10px;");
+  // Top nav - made a bit tighter on mobiles
+  html += F(".nav{position:sticky;top:0;z-index:10;padding:10px 12px 12px;");
   html += F("background:linear-gradient(180deg,rgba(0,0,0,.25),transparent),var(--primary-2);");
   html += F("box-shadow:0 16px 36px rgba(0,0,0,.25)}");
-  html += F(".nav .in{max-width:1120px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;gap:10px;color:#fff;flex-wrap:wrap}");
-  html += F(".brand{display:flex;align-items:center;gap:8px;font-weight:800;letter-spacing:.2px;font-size:.98rem}");
-  html += F(".dot{width:10px;height:10px;border-radius:999px;background:#84ffb5;box-shadow:0 0 14px #84ffb5}");
-  html += F(".nav .meta{display:flex;gap:6px;flex-wrap:wrap;align-items:center;font-weight:650;font-size:.78rem}");
-  html += F(".pill{background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.28);border-radius:999px;padding:5px 8px}");
+  html += F(".nav .in{max-width:1280px;margin:0 auto;display:flex;align-items:center;justify-content:space-between;gap:12px;color:#fff;flex-wrap:wrap}");
+  html += F(".brand{display:flex;align-items:center;gap:8px;font-weight:800;letter-spacing:.2px;font-size:1.12rem}");
+  html += F(".dot{width:12px;height:12px;border-radius:999px;background:#84ffb5;box-shadow:0 0 14px #84ffb5}");
+  html += F(".nav .meta{display:flex;gap:8px;flex-wrap:wrap;align-items:center;font-weight:650;font-size:.88rem}");
+  html += F(".pill{background:rgba(255,255,255,.16);border:1px solid rgba(255,255,255,.28);border-radius:999px;padding:7px 12px}");
   html += F(".btn-ghost{background:rgba(255,255,255,.14);border:1px solid rgba(255,255,255,.35);color:#fff;");
-  html += F("border-radius:10px;padding:6px 10px;font-weight:700;cursor:pointer;font-size:.8rem}");
+  html += F("border-radius:10px;padding:8px 14px;font-weight:700;cursor:pointer;font-size:.92rem}");
 
   // Cards and grids
-  html += F(".wrap{max-width:1120px;margin:14px auto;padding:0 10px}");
-  html += F(".glass{background:var(--glass);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid var(--glass-brd);border-radius:16px;box-shadow:var(--shadow)}");
-  html += F(".section{padding:12px}");
-  html += F(".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}");
-  html += F(".card{background:var(--card);border:1px solid var(--glass-brd);border-radius:16px;box-shadow:var(--shadow);padding:12px}");
-  html += F(".card h3{margin:0 0 6px 0;font-size:.98rem;color:var(--muted)}");
-  html += F(".card h4{margin:6px 0 4px 0;font-size:.9rem;color:var(--muted)}");
-  html += F(".chip{display:inline-flex;align-items:center;gap:6px;background:var(--chip);border:1px solid var(--chip-brd);border-radius:999px;padding:6px 10px;font-weight:650;white-space:nowrap;font-size:.85rem}");
-  html += F(".big{font-weight:800;font-size:1.1rem}.hint{opacity:.7;font-size:.8rem;margin-top:4px}.sub{opacity:.8;font-size:.8rem}");
-  html += F(".meter{position:relative;height:14px;border-radius:999px;background:linear-gradient(180deg,rgba(0,0,0,.12),transparent);border:1px solid var(--glass-brd);overflow:hidden;margin-top:6px}");
+  html += F(".wrap{max-width:1280px;margin:20px auto;padding:0 16px}");
+  html += F(".glass{background:var(--glass);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border:1px solid var(--glass-brd);border-radius:var(--radius);box-shadow:var(--shadow)}");
+  html += F(".section{padding:var(--pad)}");
+  html += F(".grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:var(--gap)}");
+  html += F(".card{background:var(--card);border:1px solid var(--glass-brd);border-radius:var(--radius);box-shadow:var(--shadow);padding:var(--pad)}");
+  html += F(".card h3{margin:0 0 8px 0;font-size:1.15rem;color:var(--ink);font-weight:800;letter-spacing:.3px}");
+  html += F(".card h4{margin:6px 0 6px 0;font-size:.95rem;color:var(--muted);font-weight:700;letter-spacing:.2px}");
+  html += F(".chip{display:inline-flex;align-items:center;gap:6px;background:var(--chip);border:1px solid var(--chip-brd);border-radius:999px;padding:8px 14px;font-weight:650;white-space:nowrap;font-size:.95rem;color:var(--ink)}");
+  html += F(".big{font-weight:800;font-size:1.3rem}.hint{color:var(--muted);font-size:.9rem;margin-top:4px}.sub{color:var(--muted);font-size:.88rem}");
+  html += F(".meter{position:relative;height:18px;border-radius:999px;background:linear-gradient(180deg,rgba(0,0,0,.12),transparent);border:1px solid var(--glass-brd);overflow:hidden;margin-top:6px}");
   html += F(".fill{position:absolute;inset:0 0 0 0;width:0%;height:100%;background:linear-gradient(90deg,#30d1ff,#4da3ff,#1c74d9);");
   html += F("box-shadow:0 0 30px rgba(77,163,255,.35) inset;transition:width .4s ease}");
-  html += F(".badge{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;border:1px solid var(--glass-brd);font-size:.8rem}");
+  html += F(".badge{display:inline-flex;align-items:center;gap:6px;padding:8px 13px;border-radius:999px;border:1px solid var(--glass-brd);font-size:.9rem}");
   html += F(".b-ok{background:rgba(34,197,94,.12);border-color:rgba(34,197,94,.35)}");
   html += F(".b-warn{background:rgba(245,158,11,.12);border-color:rgba(245,158,11,.35)}");
   html += F(".b-bad{background:rgba(239,68,68,.12);border-color:rgba(239,68,68,.38)}");
-  html += F(".toolbar{display:flex;gap:8px;flex-wrap:wrap;margin:8px 0 0}");
-  html += F(".btn{background:var(--primary);color:#fff;border:none;border-radius:12px;padding:8px 12px;font-weight:800;cursor:pointer;");
-  html += F("box-shadow:0 8px 20px rgba(0,0,0,.25);font-size:.87rem}");
-  html += F(".btn:disabled{background:#7f8aa1;cursor:not-allowed;box-shadow:none}.btn-danger{background:var(--bad)}");
+  html += F(".toolbar{display:flex;gap:var(--gap);flex-wrap:wrap;margin:14px 0 0}");
+  html += F(".btn{background:linear-gradient(180deg,var(--primary),var(--primary-2));color:#fff;border:1px solid rgba(0,0,0,.08);border-radius:13px;padding:11px 16px;font-weight:800;cursor:pointer;");
+  html += F("box-shadow:0 8px 20px rgba(0,0,0,.22);font-size:1.02rem}");
+  html += F(".btn-secondary{background:transparent;color:var(--ink);border:1px solid var(--line);box-shadow:none}");
+  html += F(".btn:disabled{background:#7f8aa1;cursor:not-allowed;box-shadow:none}.btn-danger{background:linear-gradient(180deg,#ef4444,#b91c1c);border-color:rgba(185,28,28,.6)}");
   html += F(".btn,.btn-ghost,.pill{transition:transform .06s ease,box-shadow .06s ease,filter .06s ease}");
   html += F(".btn:active:not(:disabled),.btn-ghost:active,.pill:active{transform:translateY(1px);box-shadow:inset 0 2px 6px rgba(0,0,0,.25)}");
   html += F(".btn,.btn-ghost,.pill{position:relative;overflow:hidden}");
   html += F(".ripple{position:absolute;border-radius:999px;transform:scale(0);background:rgba(255,255,255,.35);animation:ripple .5s ease-out;pointer-events:none}");
   html += F("@keyframes ripple{to{transform:scale(3.2);opacity:0;}}");
-  html += F(".zones{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:12px;justify-content:center;justify-items:stretch}");
-  html += F(".zone-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:10px 10px 12px;");
-  html += F("display:flex;flex-direction:column;gap:6px;min-height:120px}");
+  html += F(".zone-actions{margin-top:8px;justify-content:flex-end;align-items:center}");
+  html += F(".zones{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:var(--gap);justify-content:center;justify-items:stretch}");
+  html += F(".zone-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-sm);padding:var(--pad);");
+  html += F("display:flex;flex-direction:column;gap:12px;min-height:140px}");
   html += F(".zone-head{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:2px}");
-  html += F(".zone-title{display:flex;align-items:center;gap:6px;font-weight:700;font-size:.95rem;min-width:0}");
-  html += F(".zone-index{width:22px;height:22px;border-radius:999px;display:flex;align-items:center;justify-content:center;");
-  html += F("font-size:.75rem;background:var(--chip);border:1px solid var(--chip-brd);flex-shrink:0}");
+  html += F(".zone-title{display:flex;align-items:center;gap:8px;font-weight:700;font-size:1.08rem;min-width:0}");
+  html += F(".zone-index{width:26px;height:26px;border-radius:999px;display:flex;align-items:center;justify-content:center;");
+  html += F("font-size:.82rem;background:var(--chip);border:1px solid var(--chip-brd);flex-shrink:0}");
+  html += F(".zone-dot{width:13px;height:13px;border-radius:999px;background:var(--line);border:1px solid var(--glass-brd);box-shadow:0 0 0 2px rgba(0,0,0,.06) inset}");
+  html += F(".zone-dot.on{background:var(--ok);box-shadow:0 0 10px rgba(34,197,94,.55)}");
   html += F(".zone-title .big{font-size:.98rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}");
   html += F(".zone-timer{display:flex;align-items:center;gap:10px;margin-top:4px}");
   html += F(".zone-rem-wrap{min-width:90px}");
-  html += F(".zone-rem-label{font-size:.75rem;opacity:.7;display:block;margin-bottom:2px}");
-  html += F(".zone-rem{font-size:.9rem;font-weight:600}");
-  html += F(".zone-meter{flex:1}");
-  html += F(".zone-meta-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:4px;font-size:.78rem;opacity:.85}");
-  html += F(".zone-meta-row .pill-soft{padding:3px 8px;border-radius:999px;background:var(--chip);border:1px solid var(--chip-brd)}");
+  html += F(".zone-rem-label{font-size:.8rem;letter-spacing:.4px;text-transform:uppercase;color:var(--muted);display:block;margin-bottom:2px}");
+  html += F(".zone-rem{font-size:1.05rem;font-weight:700;color:var(--ink)}");
+  html += F(".zone-meter{flex:1;display:flex;flex-direction:column;gap:3px}");
+  html += F(".zone-meter .meter{margin-top:0}");
+  html += F(".zone-bar-label{font-size:.82rem;letter-spacing:.3px;color:var(--muted);font-weight:600}");
+  html += F(".zone-meta-row{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;font-size:.82rem;color:var(--muted)}");
+  html += F(".zone-meta-row .pill-soft{padding:4px 10px;border-radius:999px;background:var(--chip);border:1px solid var(--chip-brd)}");
   html += F(".zone-meta-row b{font-weight:700}");
 
   // Schedules styles (collapsible, mobile-friendly)
-  html += F(".sched{margin-top:12px}");
-  html += F(".sched-ctr{--schedW:360px;--gap:10px;max-width:100%;margin:0 auto}");
-  html += F(".sched-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:var(--gap)}");
-  html += F(".sched-card{background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:10px}");
-  html += F(".rowx{display:flex;gap:8px;align-items:center;margin:5px 0;flex-wrap:wrap}");
-  html += F(".rowx label{min-width:86px;font-size:.83rem}");
-  html += F(".in{border:1px solid var(--line);border-radius:10px;padding:7px 9px;background:transparent;color:var(--ink);font-size:.83rem}");
-  html += F(".day{display:inline-flex;gap:4px;border:1px solid var(--line);border-radius:999px;padding:5px 9px;margin:2px 3px;font-size:.8rem}");
-  html += F("@media(max-width:720px){.nav .in{flex-direction:column;align-items:flex-start}.zones{grid-template-columns:1fr}.sched-grid{grid-template-columns:1fr}}");
-  html += F(".collapse{cursor:pointer;user-select:none;display:flex;align-items:center;justify-content:space-between;font-size:.95rem}");
-  html += F(".collapse .arr{font-size:.9rem;opacity:.8;margin-left:6px}");
+  html += F(".sched{margin-top:var(--gap)}");
+  html += F(".sched-ctr{--schedW:360px;--gap:var(--gap);max-width:100%;margin:0 auto}");
+  html += F(".sched-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(300px,1fr));gap:var(--gap)}");
+  html += F(".sched-card{background:var(--panel);border:1px solid var(--line);border-radius:var(--radius-sm);padding:var(--pad)}");
+  html += F(".sched-card h4{margin:0 0 10px 0;font-size:1.05rem;font-weight:800;color:var(--ink);display:flex;align-items:center;gap:8px}");
+  html += F(".sched-badge{background:var(--chip);border:1px solid var(--chip-brd);border-radius:999px;padding:4px 9px;font-size:.8rem;font-weight:700;color:var(--muted)}");
+  html += F(".rowx{display:grid;grid-template-columns:110px 1fr;gap:10px;align-items:center;margin:10px 0}");
+  html += F(".rowx label{min-width:0;font-size:.82rem;color:var(--muted);font-weight:700;letter-spacing:.4px;text-transform:uppercase}");
+  html += F(".field{display:flex;align-items:center;gap:8px;flex-wrap:wrap}");
+  html += F(".field.inline .in{width:72px}");
+  html += F(".field .sep{color:var(--muted);font-weight:700}");
+  html += F(".field .unit{color:var(--muted);font-size:.85rem}");
+  html += F(".toggle-inline{display:inline-flex;align-items:center;gap:6px;font-size:.85rem;color:var(--muted)}");
+  html += F(".in{border:1px solid var(--line);border-radius:10px;padding:8px 10px;background:transparent;color:var(--ink);font-size:.9rem}");
+  html += F(".days-grid{display:flex;flex-wrap:wrap;gap:8px;justify-content:center}");
+  html += F(".day{display:inline-flex;gap:6px;align-items:center;border:1px solid var(--line);border-radius:999px;padding:7px 12px;font-size:.85rem;background:var(--chip);border-color:var(--chip-brd)}");
+  html += F(".day input{margin:0}");
+  html += F("@media(max-width:720px){.nav .in{flex-direction:column;align-items:flex-start}.zones{grid-template-columns:1fr}.sched-grid{grid-template-columns:1fr}.rowx{grid-template-columns:1fr}.rowx label{margin-bottom:4px}}");
+  html += F(".collapse{cursor:pointer;user-select:none;display:flex;align-items:center;justify-content:space-between;font-size:1.05rem}");
+  html += F(".collapse .arr{font-size:1rem;opacity:.8;margin-left:6px}");
+  html += F(".sched-title{display:flex;flex-direction:column;gap:2px}");
+  html += F(".sched-sub{font-size:.88rem;color:var(--muted);font-weight:600}");
 
   // Desktop enhancements
   html += F("@media(min-width:1024px){");
-  html += F("body{font-size:15px;}");
-  html += F(".wrap{margin:18px auto;padding:0 18px;}");
-  html += F(".glass.section{padding:18px;}");
+  html += F("body{font-size:16px;}");
+  html += F(".wrap{margin:20px auto;padding:0 20px;}");
+  html += F(".glass.section{padding:var(--pad-lg);}");
   html += F(".summary-grid{grid-template-columns:repeat(4,minmax(0,1fr));}");
-  html += F(".zones{grid-template-columns:repeat(3,minmax(260px,1fr));}");
-  html += F(".card{padding:16px;}");
-  html += F(".card h3{font-size:1rem;}");
+  html += F(".zones{grid-template-columns:repeat(3,minmax(300px,1fr));}");
+  html += F(".card{padding:var(--pad-lg);}");
+  html += F(".card h3{font-size:1.12rem;}");
   html += F("}");
   html += F("</style></head><body>");
 
@@ -2013,7 +2034,9 @@ void handleRoot() {
   html += F("<span class='pill' id='clock'>"); html += timeStr; html += F("</span>");
   html += F("<span class='pill'>"); html += dateStr; html += F("</span>");
   html += F("<span class='pill'>"); html += ((ti && ti->tm_isdst>0) ? "DST" : "STD"); html += F("</span>");
-  html += F("<span class='pill'>espirrigation.local</span>");
+  html += F("<span class='pill' title='IP ");
+  html += WiFi.localIP().toString();
+  html += F("'>espirrigation.local</span>");
   html += F("<button id='btn-master' class='pill' style='cursor:pointer;border:none' aria-pressed='");
   html += (systemMasterEnabled ? "true" : "false");
   html += F("' title='Toggle master enable/disable'>Master: <b id='master-state'>");
@@ -2026,9 +2049,9 @@ void handleRoot() {
   html += F("<div class='wrap'><div class='glass section'><div class='grid summary-grid'>");
 
   // NEW location card with OpenWeatherMap link
-html += F("<div class='card'><h3>Location</h3>"
-          "<a class='chip' id='owmLink' href='#' target='_blank' rel='noopener'>"
-          "🏙️ <b id='cityName'>");
+  html += F("<div class='card'><h3>Location</h3>"
+            "<a class='chip' id='owmLink' href='#' target='_blank' rel='noopener'>"
+            "<b id='cityName'>");
 html += cityName;   // initial label; JS will overwrite from /status
 html += F("</b></a></div>");
 
@@ -2046,17 +2069,17 @@ html += F("</b></a></div>");
 
   html += F("<div class='card'><h3>Current Weather</h3>");
   html += F("<div class='grid' style='grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px'>");
-  html += F("<div class='chip'>🌡️ "); html += (isnan(temp) ? String("--") : String(temp,1)+" ℃"); html += F("</div>");
-  html += F("<div class='chip'>💧 ");  html += (isnan(hum)  ? String("--") : String((int)hum)+" %"); html += F("</div>");
-  html += F("<div class='chip'>🌬️ "); html += (isnan(ws)   ? String("--") : String(ws,1)+" m/s"); html += F("</div>");
-  html += F("<div class='chip'>☁️ <span class='sub'>Cond</span>&nbsp;<b id='cond'>");
+  html += F("<div class='chip'>Temp "); html += (isnan(temp) ? String("--") : String(temp,1)+" C"); html += F("</div>");
+  html += F("<div class='chip'>Humidity ");  html += (isnan(hum)  ? String("--") : String((int)hum)+" %"); html += F("</div>");
+  html += F("<div class='chip'>Wind "); html += (isnan(ws)   ? String("--") : String(ws,1)+" m/s"); html += F("</div>");
+  html += F("<div class='chip'>Condition <b id='cond'>");
   html += cond.length() ? cond : String("--");
   html += F("</b></div></div></div>");
 
   html += F("<div class='card'><h3>Weather Today</h3>");
   html += F("<div class='grid' style='grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:6px'>");
-  html += F("<div class='chip'><b>Low</b>&nbsp;<b id='tmin'>---</b> ℃</div>");
-  html += F("<div class='chip'><b>High</b>&nbsp;<b id='tmax'>---</b> ℃</div>");
+  html += F("<div class='chip'><b>Low</b>&nbsp;<b id='tmin'>---</b> C</div>");
+  html += F("<div class='chip'><b>High</b>&nbsp;<b id='tmax'>---</b> C</div>");
   html += F("<div class='chip'><b>Pressure</b>&nbsp;<b id='press'>--</b> hPa</div>");
   html += F("<div class='chip'><span class='sub'>Sunrise</span>&nbsp;<b id='sunr'>--:--</b></div>");
   html += F("<div class='chip'><span class='sub'>Sunset</span>&nbsp;<b id='suns'>--:--</b></div>");
@@ -2064,9 +2087,9 @@ html += F("</b></a></div>");
 
   // Delays / status
   html += F("<div class='card'><h3>Delays</h3><div class='grid' style='grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:6px'>");
-  html += F("<div id='rainBadge' class='badge "); html += (rainActive ? "b-bad" : "b-ok"); html += F("'>🌧️ Rain: <b>");
+  html += F("<div id='rainBadge' class='badge '"); html += (rainActive ? "b-bad" : "b-ok"); html += F("'>Rain: <b>");
   html += (rainActive?"Active":"Off"); html += F("</b></div>");
-  html += F("<div id='windBadge' class='badge "); html += (windActive ? "b-warn" : "b-ok"); html += F("'>💨 Wind: <b>");
+  html += F("<div id='windBadge' class='badge '"); html += (windActive ? "b-warn" : "b-ok"); html += F("'>Wind: <b>");
   html += (windActive?"Active":"Off"); html += F("</b></div>");
   html += F("<div class='badge'>Cause: <b id='rainCauseBadge'>"); html += causeText; html += F("</b></div>");
   html += F("<div class='badge'>1h (Now): <b id='acc1h'>--</b> mm</div>");
@@ -2076,10 +2099,10 @@ html += F("</b></a></div>");
   // Next Water
   html += F("<div class='card'><h3>Next Water</h3>");
   html += F("<div class='grid' style='grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:6px'>");
-  html += F("<div class='chip'>🧭 <b id='nwZone'>--</b></div>");
-  html += F("<div class='chip'>🕒 <b id='nwTime'>--:--</b></div>");
-  html += F("<div class='chip'>⏳ In <b id='nwETA'>--</b></div>");
-  html += F("<div class='chip'>🧮 Dur <b id='nwDur'>--</b></div>");
+  html += F("<div class='chip'>Zone: <b id='nwZone'>--</b></div>");
+  html += F("<div class='chip'>Start: <b id='nwTime'>--:--</b></div>");
+  html += F("<div class='chip'>ETA: <b id='nwETA'>--</b></div>");
+  html += F("<div class='chip'>Duration: <b id='nwDur'>--</b></div>");
   html += F("</div><div class='hint'>Active weather delays cancel watering if scheduled.</div></div>");
 
   html += F("</div></div>"); // end glass / grid
@@ -2091,48 +2114,56 @@ html += F("</b></a></div>");
             "const a=this.querySelector('.arr');"
             "const open=b.style.display!=='none';"
             "b.style.display=open?'none':'block';"
-            "a.textContent=open?'▸':'▾';\">");
-  html += F("<span>Schedules (Click Here)</span><span class='arr'>▸</span></h3>");
+            "a.textContent=open?'>':'v';\">");
+  html += F("<span class='sched-title'><span>Schedules</span><span class='sched-sub'>Edit by zone</span></span><span class='arr'>></span></h3>");
   html += F("<div id='schedBody' class='sched-ctr' style='display:none'>");
   html += F("<div class='sched-grid'>");
 
   for (int z=0; z<(int)zonesCount; ++z) {
-    html += F("<div class='sched-card'><h4>");
+    html += F("<div class='sched-card'><h4><span class='sched-badge'>Z");
+    html += String(z + 1);
+    html += F("</span> ");
     html += zoneNames[z];
     html += F("</h4><form method='POST' action='/submit'>");
     html += F("<input type='hidden' name='onlyZone' value='"); html += String(z); html += F("'>");
 
     // Name
-    html += F("<div class='rowx'><label>Name</label>");
+    html += F("<div class='rowx'><label>Name</label><div class='field'>");
     html += F("<input class='in' type='text' name='zoneName"); html += String(z);
-    html += F("' value='"); html += zoneNames[z]; html += F("' maxlength='32' style='flex:1;min-width:150px'></div>");
+    html += F("' value='"); html += zoneNames[z]; html += F("' maxlength='32' style='flex:1;min-width:200px'>");
+    html += F("</div></div>");
 
     // Start 1
-    html += F("<div class='rowx'><label>Start 1</label>");
+    html += F("<div class='rowx'><label>Start 1</label><div class='field inline'>");
     html += F("<input class='in' type='number' min='0' max='23' name='startHour"); html += String(z);
-    html += F("' value='"); html += String(startHour[z]); html += F("' style='width:64px'> : ");
+    html += F("' value='"); html += String(startHour[z]); html += F("'>");
+    html += F("<span class='sep'>:</span>");
     html += F("<input class='in' type='number' min='0' max='59' name='startMin"); html += String(z);
-    html += F("' value='"); html += String(startMin[z]); html += F("' style='width:64px'></div>");
+    html += F("' value='"); html += String(startMin[z]); html += F("'>");
+    html += F("</div></div>");
 
     // Start 2
-    html += F("<div class='rowx'><label>Start 2</label>");
+    html += F("<div class='rowx'><label>Start 2</label><div class='field inline'>");
     html += F("<input class='in' type='number' min='0' max='23' name='startHour2"); html += String(z);
-    html += F("' value='"); html += String(startHour2[z]); html += F("' style='width:64px'> : ");
+    html += F("' value='"); html += String(startHour2[z]); html += F("'>");
+    html += F("<span class='sep'>:</span>");
     html += F("<input class='in' type='number' min='0' max='59' name='startMin2"); html += String(z);
-    html += F("' value='"); html += String(startMin2[z]); html += F("' style='width:64px'>");
-    html += F("<label style='margin-left:6px;font-size:.8rem'><input type='checkbox' name='enableStartTime2");
+    html += F("' value='"); html += String(startMin2[z]); html += F("'>");
+    html += F("<label class='toggle-inline'><input type='checkbox' name='enableStartTime2");
     html += String(z); html += F("' "); html += (enableStartTime2[z] ? "checked" : "");
-    html += F("> Enable</label></div>");
+    html += F("> Enable</label></div></div>");
 
     // Duration
-    html += F("<div class='rowx'><label>Duration</label>");
+    html += F("<div class='rowx'><label>Duration</label><div class='field inline'>");
     html += F("<input class='in' type='number' min='0' max='600' name='durationMin"); html += String(z);
-    html += F("' value='"); html += String(durationMin[z]); html += F("' style='width:64px'> m : ");
+    html += F("' value='"); html += String(durationMin[z]); html += F("'>");
+    html += F("<span class='unit'>m</span><span class='sep'>:</span>");
     html += F("<input class='in' type='number' min='0' max='59' name='durationSec"); html += String(z);
-    html += F("' value='"); html += String(durationSec[z]); html += F("' style='width:64px'> s</div>");
+    html += F("' value='"); html += String(durationSec[z]); html += F("'>");
+    html += F("<span class='unit'>s</span></div></div>");
 
     // Days
-    html += F("<div class='rowx' style='flex-wrap:wrap'><label>Days</label><div>");
+    html += F("<div class='rowx'><label>Days</label><div class='days-grid'>");
     for (int d=0; d<7; ++d) {
       html += F("<label class='day'><input type='checkbox' name='day"); html += String(z); html += "_"; html += String(d);
       html += F("' "); html += (days[z][d] ? "checked" : ""); html += F("> "); html += DLBL[d]; html += F("</label>");
@@ -2140,7 +2171,7 @@ html += F("</b></a></div>");
     html += F("</div></div>");
 
     // Actions
-    html += F("<div class='toolbar'><button class='btn' type='submit'>Save Zone</button></div>");
+    html += F("<div class='toolbar' style='justify-content:flex-end'><button class='btn' type='submit'>Save Zone</button></div>");
     html += F("</form></div>");
   }
 
@@ -2179,6 +2210,11 @@ html += F("</b></a></div>");
         html += F("<span class='zone-index'>Z");
         html += String(z+1);
         html += F("</span>");
+        html += F("<span id='zone-");
+        html += String(z);
+        html += F("-dot' class='zone-dot ");
+        html += (zoneActive[z] ? "on" : "");
+        html += F("'></span>");
         html += F("<span class='big'>");
         html += zoneNames[z];
         html += F("</span>");
@@ -2188,7 +2224,7 @@ html += F("</b></a></div>");
       html += F("-state' class='badge ");
       html += (zoneActive[z] ? "b-ok" : "");
       html += F("'>");
-      html += (zoneActive[z] ? "▶︎ Running" : "⏹ Off");
+      html += (zoneActive[z] ? "Running" : "Off");
       html += F("</div>");
     html += F("</div>"); // .zone-head
 
@@ -2209,16 +2245,19 @@ html += F("</b></a></div>");
           html += String(rs);
           html += F("s");
         } else {
-          html += F("—");
+          html += F("--");
         }
         html += F("</div>");
       html += F("</div>"); // .zone-rem-wrap
 
-      html += F("<div class='meter zone-meter' title='Progress'><div id='zone-");
+      html += F("<div class='zone-meter'>");
+      html += F("<span class='zone-bar-label'>Progress</span>");
+      html += F("<div class='meter'><div id='zone-");
       html += String(z);
       html += F("-bar' class='fill' style='width:");
       html += String(pctDone);
       html += F("%'></div></div>");
+      html += F("</div>");
 
     html += F("</div>"); // .zone-timer
 
@@ -2233,7 +2272,7 @@ html += F("</b></a></div>");
     html += F("</div>");
 
     // Actions
-    html += F("<div class='toolbar' style='margin-top:6px;justify-content:flex-end'>");
+    html += F("<div class='toolbar zone-actions'>");
     html += F("<button type='button' class='btn' id='zone-");
     html += String(z);
     html += F("-on' onclick='toggleZone(");
@@ -2259,14 +2298,14 @@ html += F("</b></a></div>");
   html += F("<div class='grid center' style='margin:12px auto 20px'><div class='card' style='grid-column:1/-1'>");
   html += F("<h3>Tools</h3><div class='toolbar'>");
   html += F("<a class='btn' href='/setup'>Setup</a>");
-  html += F("<a class='btn' href='/events'>Events</a>");
-  html += F("<a class='btn' href='/tank'>Calibrate Tank</a>");
-  html += F("<a class='btn' href='/status'>Status JSON</a>");
+  html += F("<a class='btn btn-secondary' href='/events'>Events</a>");
+  html += F("<a class='btn btn-secondary' href='/tank'>Calibrate Tank</a>");
+  html += F("<a class='btn btn-secondary' href='/status'>Status JSON</a>");
   html += F("</div></div></div>");
 
   html += F("<div class='grid center' style='margin:0 auto 24px'><div class='card' style='grid-column:1/-1'>");
   html += F("<h3>System Controls</h3><div class='toolbar'>");
-  html += F("<button class='btn' id='toggle-backlight-btn' title='Invert OLED (night mode)'>LCD Toggle</button>");
+  html += F("<button class='btn btn-secondary' id='toggle-backlight-btn' title='Invert OLED (night mode)'>LCD Toggle</button>");
   html += F("<button class='btn btn-danger' id='rebootBtn'>Reboot</button>");
   html += F("</div></div></div>");
 
@@ -2324,8 +2363,8 @@ html += F("</b></a></div>");
   html += F("async function refreshStatus(){try{const r=await fetch('/status');const st=await r.json();");
   html += F("if(typeof st.deviceEpoch==='number' && st.deviceEpoch>0 && _devEpoch===null){ startDeviceClock(st.deviceEpoch); }");
   html += F("const rb=document.getElementById('rainBadge');const wb=document.getElementById('windBadge');");
-  html += F("if(rb){rb.className='badge '+(st.rainDelayActive?'b-bad':'b-ok');rb.innerHTML='🌧️ Rain: <b>'+(st.rainDelayActive?'Active':'Off')+'</b>';}");
-  html += F("if(wb){wb.className='badge '+(st.windDelayActive?'b-warn':'b-ok');wb.innerHTML='💨 Wind: <b>'+(st.windDelayActive?'Active':'Off')+'</b>';}");
+  html += F("if(rb){rb.className='badge '+(st.rainDelayActive?'b-bad':'b-ok');rb.innerHTML='Rain: <b>'+(st.rainDelayActive?'Active':'Off')+'</b>';}");
+  html += F("if(wb){wb.className='badge '+(st.windDelayActive?'b-warn':'b-ok');wb.innerHTML='Wind: <b>'+(st.windDelayActive?'Active':'Off')+'</b>';}");
   html += F("const cause=document.getElementById('rainCauseBadge'); if(cause) cause.textContent=st.rainDelayCause||'Off';");
   html += F("const pct=st.tankPct||0; const tf=document.getElementById('tankFill'); const tl=document.getElementById('tankPctLabel');");
   html += F("if(tf) tf.style.width=Math.max(0,Math.min(100,pct))+'%'; if(tl) tl.textContent=pct+'%';");
@@ -2348,9 +2387,9 @@ html += F("</b></a></div>");
   html += F("const acc24=document.getElementById('acc24'); if(acc24){ const v=(typeof st.rain24hActual==='number')?st.rain24hActual:(typeof st.rain24h==='number'?st.rain24h:NaN); acc24.textContent=isNaN(v)?'--':v.toFixed(1);} ");
 
   html += F("if(Array.isArray(st.zones)){ st.zones.forEach((z,idx)=>{");
-  html += F("const stateEl=document.getElementById('zone-'+idx+'-state'); const remEl=document.getElementById('zone-'+idx+'-rem'); const barEl=document.getElementById('zone-'+idx+'-bar');");
-  html += F("if(stateEl){stateEl.className='badge '+(z.active?'b-ok':'');stateEl.innerHTML=z.active?'▶︎ Running':'⏹ Off';}");
-  html += F("if(remEl){ if(z.active){ const r=z.remaining||0; const rm=Math.floor(r/60),rs=r%60; remEl.textContent=rm+'m '+(rs<10?'0':'')+rs+'s left'; } else remEl.textContent='—'; }");
+  html += F("const stateEl=document.getElementById('zone-'+idx+'-state'); const remEl=document.getElementById('zone-'+idx+'-rem'); const barEl=document.getElementById('zone-'+idx+'-bar'); const dotEl=document.getElementById('zone-'+idx+'-dot');");
+  html += F("if(stateEl){stateEl.className='badge '+(z.active?'b-ok':'');stateEl.innerHTML=z.active?'Running':'Off';} if(dotEl){dotEl.className='zone-dot'+(z.active?' on':'');}");
+  html += F("if(remEl){ if(z.active){ const r=z.remaining||0; const rm=Math.floor(r/60),rs=r%60; remEl.textContent=rm+'m '+(rs<10?'0':'')+rs+'s left'; } else remEl.textContent='--'; }");
   html += F("if(barEl){ let p=0; const total=z.totalSec||0; const rem=z.remaining||0; p=total>0?Math.max(0,Math.min(100,Math.round(100*(total-rem)/total))):0; barEl.style.width=p+'%'; }");
   html += F("const onBtn=document.getElementById('zone-'+idx+'-on'); const offBtn=document.getElementById('zone-'+idx+'-off');");
   html += F("if(onBtn) onBtn.disabled=!!z.active; if(offBtn) offBtn.disabled=!z.active;");
@@ -2406,39 +2445,42 @@ void handleSetupPage() {
   String html; html.reserve(26000);
 
   html += F("<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>");
-  html += F("<title>Setup — ESP32 Irrigation</title>");
+  html += F("<title>Setup - ESP32 Irrigation</title>");
   html += F("<style>");
-  html += F("body{margin:0;font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;background:#0e1726;color:#e8eef6}");
-  html += F(".wrap{max-width:900px;margin:24px auto;padding:0 10px}");
-  html += F("h1{margin:0 0 14px 0;font-size:1.4em}");
-  html += F(".card{background:#111927;border:1px solid #1f2a44;border-radius:14px;box-shadow:0 8px 34px rgba(0,0,0,.35);padding:14px 12px;margin-bottom:14px}");
-  html += F("label{display:inline-block;min-width:180px;font-size:.9rem}");
+  html += F("body{margin:0;font-family:'Trebuchet MS','Candara','Segoe UI',sans-serif;background:#0e1726;color:#e8eef6;font-size:15px}");
+  html += F(".wrap{max-width:1100px;margin:28px auto;padding:0 16px}");
+  html += F("h1{margin:0 0 16px 0;font-size:1.7em;letter-spacing:.3px;font-weight:800}");
+  html += F(".card{background:#111927;border:1px solid #1f2a44;border-radius:16px;box-shadow:0 8px 34px rgba(0,0,0,.35);padding:18px 16px;margin-bottom:16px}");
+  html += F(".card h3{margin:0 0 12px 0;font-size:1.1em;font-weight:800;letter-spacing:.3px;color:#e8eef6}");
+  html += F("label{display:inline-block;min-width:200px;font-size:.95rem;font-weight:600;color:#d6e1f4}");
   // Inputs + select share the same theme
-  html += F("input[type=text],input[type=number],select{width:100%;max-width:420px;background:#0b1220;color:#e8eef6;border:1px solid #233357;border-radius:10px;padding:8px 10px;font-size:.9rem}");
-  html += F(".row{display:flex;align-items:center;gap:10px;margin:8px 0;flex-wrap:wrap}.row small{color:#aab8d0;font-size:.8rem}");
-  html += F(".btn{background:#1976d2;color:#fff;border:none;border-radius:10px;padding:8px 12px;font-weight:600;cursor:pointer;box-shadow:0 6px 16px rgba(25,118,210,.25);font-size:.9rem}");
-  html += F(".btn-alt{background:#263244;color:#e8eef6;border:none;border-radius:10px;padding:8px 12px;font-size:.9rem}");
+  html += F("input[type=text],input[type=number],select{background:#0b1220;color:#e8eef6;border:1px solid #233357;border-radius:12px;padding:9px 12px;font-size:.95rem}");
+  html += F("input[type=text],select{width:100%;max-width:520px}");
+  html += F("input[type=number]{width:100%;max-width:200px}");
+  html += F(".row{display:flex;align-items:center;gap:12px;margin:10px 0;flex-wrap:wrap}.row small{color:#9fb0ca;font-size:.85rem}");
+  html += F(".btn{background:linear-gradient(180deg,#1c74d9,#165fba);color:#fff;border:1px solid rgba(0,0,0,.18);border-radius:12px;padding:10px 14px;font-weight:700;cursor:pointer;box-shadow:0 6px 16px rgba(25,118,210,.25);font-size:.95rem}");
+  html += F(".btn-alt{background:#1b2537;color:#e8eef6;border:1px solid #2a3954;border-radius:12px;padding:10px 14px;font-size:.95rem}");
   html += F(".btn,.btn-alt{transition:transform .06s ease,box-shadow .06s ease,filter .06s ease}");
   html += F(".btn:active,.btn-alt:active{transform:translateY(1px);box-shadow:inset 0 2px 6px rgba(0,0,0,.25)}");
   html += F(".btn,.btn-alt{position:relative;overflow:hidden}");
   html += F(".ripple{position:absolute;border-radius:999px;transform:scale(0);background:rgba(255,255,255,.35);animation:ripple .5s ease-out;pointer-events:none}");
   html += F("@keyframes ripple{to{transform:scale(3.2);opacity:0;}}");
-  html += F(".grid{display:grid;grid-template-columns:1fr;gap:10px}");
-  html += F(".cols2{display:grid;grid-template-columns:1fr 1fr;gap:12px}");
-  html += F("@media(max-width:760px){.cols2{grid-template-columns:1fr}label{min-width:130px}}");
-  html += F(".switchline{display:flex;gap:10px;align-items:center;flex-wrap:wrap}");
-  html += F(".subhead{opacity:.85;margin:6px 0 4px 0;font-weight:700;font-size:.9rem}");
-  html += F(".hr{height:1px;background:#1f2a44;margin:8px 0 6px 0;border:none}");
+  html += F(".grid{display:grid;grid-template-columns:1fr;gap:14px}");
+  html += F(".cols2{display:grid;grid-template-columns:1fr 1fr;gap:14px}");
+  html += F("@media(max-width:760px){.cols2{grid-template-columns:1fr}label{min-width:150px}}");
+  html += F(".switchline{display:flex;gap:12px;align-items:center;flex-wrap:wrap}");
+  html += F(".subhead{opacity:.85;margin:8px 0 6px 0;font-weight:700;font-size:.98rem}");
+  html += F(".hr{height:1px;background:#1f2a44;margin:10px 0 8px 0;border:none}");
 
   // Chips + inline options for timezone mode
-  html += F(".inline-options{display:flex;flex-wrap:wrap;gap:8px}");
-  html += F(".chip{display:inline-flex;align-items:center;gap:6px;padding:4px 10px;border-radius:999px;background:#0b1220;border:1px solid #233357;font-size:.8rem;color:#e8eef6}");
+  html += F(".inline-options{display:flex;flex-wrap:wrap;gap:10px}");
+  html += F(".chip{display:inline-flex;align-items:center;gap:6px;padding:6px 12px;border-radius:999px;background:#0b1220;border:1px solid #233357;font-size:.85rem;color:#e8eef6}");
   html += F(".chip input{margin:0}");
   html += F(".chip span{white-space:nowrap}");
 
   // Help text row: let the text wrap nicely
   html += F(".helptext label{min-width:0}");
-  html += F(".helptext small{max-width:420px;display:block}");
+  html += F(".helptext small{max-width:520px;display:block}");
 
   // Make native select look like themed dropdown with a chevron
   html += F("select{appearance:none;-webkit-appearance:none;-moz-appearance:none;padding-right:32px;");
@@ -2447,16 +2489,17 @@ void handleSetupPage() {
 
   // Desktop tuning
   html += F("@media(min-width:1024px){");
-  html += F("body{font-size:15px;}");
-  html += F(".wrap{max-width:1040px;padding:0 18px;}");
-  html += F(".card{padding:18px 16px;}");
+  html += F("body{font-size:16px;}");
+  html += F(".wrap{max-width:1160px;padding:0 20px;}");
+  html += F(".card{padding:20px 18px;}");
   html += F(".row{justify-content:space-between;}");
-  html += F("label{min-width:220px;}");
-  html += F("input[type=text],input[type=number],select{max-width:480px;}");
+  html += F("label{min-width:240px;}");
+  html += F("input[type=text],select{max-width:560px;}");
+  html += F("input[type=number]{max-width:220px;}");
   html += F("}");
   html += F("</style></head><body>");
 
-  html += F("<div class='wrap'><h1>⚙️ Setup</h1><form action='/configure' method='POST'>");
+  html += F("<div class='wrap'><h1>Setup</h1><form action='/configure' method='POST'>");
 
   // Weather
   html += F("<div class='card'><h3>Weather</h3>");
@@ -2515,7 +2558,7 @@ void handleSetupPage() {
   html += F("'><small>Cooldown period after rain stops</small></div>");
   html += F("<div class='row'><label>Rain Threshold 24h (mm)</label><input type='number' min='0' max='200' name='rainThreshold24h' value='");
   html += String(rainThreshold24h_mm);
-  html += F("'><small>Delay if ≥ threshold (24 Total)</small></div>");
+  html += F("'><small>Delay if >= threshold (24h total)</small></div>");
   html += F("<div class='row'><label>Pause for (hours)</label><input type='number' min='0' max='720' name='pauseHours' value='");
   time_t nowEp = time(nullptr);
   {
@@ -2533,7 +2576,7 @@ void handleSetupPage() {
   // Auto
   html += F("<label><input type='radio' name='waterMode' value='auto' ");
   if (!justUseTank && !justUseMains) html += F("checked");
-  html += F("> Auto (Tank → Mains)</label>");
+  html += F("> Auto (Tank + Mains)</label>");
 
   // Only Tank
   html += F("<label><input type='radio' name='waterMode' value='tank' ");
@@ -2550,7 +2593,7 @@ void handleSetupPage() {
   html += F("<div class='row'><label>Tank Low Threshold (%)</label>"
             "<input type='number' min='0' max='100' name='tankThresh' value='");
   html += String(tankLowThresholdPct);
-  html += F("'><small>Switch to mains if tank ≤ this level</small></div>");
+  html += F("'><small>Switch to mains if tank below this level</small></div>");
 
   // Quick actions
   html += F("<div class='row' style='gap:8px;flex-wrap:wrap;margin-top:6px'>");
@@ -2568,7 +2611,7 @@ void handleSetupPage() {
   html += F("</div>"); // end Delays card
 
   // GPIO fallback pins
-  html += F("<div class='card'><h3>GPIO Fallback (if I²C relays not found)</h3><div class='grid'>");
+  html += F("<div class='card'><h3>GPIO Fallback (if I2C relays not found)</h3><div class='grid'>");
   for (uint8_t i=0;i<MAX_ZONES;i++){
     html += F("<div class='row'><label>Zone "); html += String(i+1);
     html += F(" Pin</label><input type='number' min='0' max='39' name='zonePin"); html += String(i);
@@ -2605,7 +2648,7 @@ void handleSetupPage() {
   // Timezone
   html += F("<div class='card'><h3>Timezone</h3>");
 
-  // Mode selector – cleaner row, better labels
+  // Mode selector - cleaner row, better labels
   html += F("<div class='row switchline'>");
   html += F("<label>Mode</label>");
   html += F("<div class='inline-options'>");
@@ -2646,7 +2689,7 @@ void handleSetupPage() {
   html += F("<input type='text' name='tzIANA' value='");
   html += tzIANA;
   html += F("' placeholder='Australia/Adelaide'>");
-  html += F("<select id='tzIANASelect'><option value=''>— Select from list —</option></select>");
+  html += F("<select id='tzIANASelect'><option value=''>Select from list</option></select>");
   html += F("</div>");
   html += F("</div>");
 
@@ -2699,7 +2742,7 @@ void handleSetupPage() {
   // Helper to populate the select + sync inputs from a map of { IANA: POSIX }
   html += F("function buildTzOptions(zones){");
   html += F(" if(!tzSel||!tzInput) return;");
-  html += F(" tzSel.innerHTML='<option value=\"\">— Select from list —</option>';");
+  html += F(" tzSel.innerHTML='<option value=\"\">Select from list</option>';");
 
   html += F(" const names=Object.keys(zones).sort();");
   html += F(" names.forEach(name=>{");
@@ -2739,7 +2782,7 @@ void handleSetupPage() {
   html += F("async function loadTimezones(){");
   html += F(" if(!tzSel||!tzInput) return;");
 
-  html += F(" tzSel.innerHTML='<option value=\"\">Loading…</option>';");
+  html += F(" tzSel.innerHTML='<option value=\"\">Loading...</option>';");
 
   html += F(" try{");
   html += F("   const res=await fetch(TZ_DB_URL);");
@@ -2824,27 +2867,27 @@ void handleLogPage() {
   html += F("<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>");
   html += F("<title>Event Log</title>");
   html += F("<style>");
-  html += F("body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;background:#0f1522;color:#e8eef6;margin:0}");
-  html += F("header{background:#13213a;color:#fff;text-align:center;padding:16px 0 10px;font-size:1.2em}");
-  html += F(".wrap{max-width:980px;margin:16px auto;padding:0 10px}");
-  html += F(".toolbar{margin:8px 0;display:flex;flex-wrap:wrap;gap:8px}");
-  html += F(".btn{padding:8px 12px;background:#1e2d4c;border-radius:10px;text-decoration:none;color:#fff;font-size:.9rem;border:none;cursor:pointer;display:inline-block}");
+  html += F("body{font-family:'Trebuchet MS','Candara','Segoe UI',sans-serif;background:#0f1522;color:#e8eef6;margin:0;font-size:15px}");
+  html += F("header{background:#13213a;color:#fff;text-align:center;padding:18px 0 12px;font-size:1.3em}");
+  html += F(".wrap{max-width:1120px;margin:18px auto;padding:0 12px}");
+  html += F(".toolbar{margin:10px 0;display:flex;flex-wrap:wrap;gap:10px}");
+  html += F(".btn{padding:10px 14px;background:#1e2d4c;border-radius:12px;text-decoration:none;color:#fff;font-size:.95rem;border:none;cursor:pointer;display:inline-block}");
   html += F(".btn{transition:transform .06s ease,box-shadow .06s ease,filter .06s ease}");
   html += F(".btn:active{transform:translateY(1px);box-shadow:inset 0 2px 6px rgba(0,0,0,.25)}");
   html += F(".btn{position:relative;overflow:hidden}");
   html += F(".ripple{position:absolute;border-radius:999px;transform:scale(0);background:rgba(255,255,255,.35);animation:ripple .5s ease-out;pointer-events:none}");
   html += F("@keyframes ripple{to{transform:scale(3.2);opacity:0;}}");
   html += F(".btn-danger{background:#b93b3b}.btn-warn{background:#a15517}");
-  html += F(".table-wrap{margin-top:8px;overflow-x:auto;border-radius:12px;border:1px solid #22314f}");
-  html += F("table{width:100%;border-collapse:collapse;background:#0b1220;min-width:720px}");
-  html += F("th,td{border:1px solid #22314f;padding:7px 6px;font-size:.9em;text-align:left;white-space:nowrap}");
+  html += F(".table-wrap{margin-top:10px;overflow-x:auto;border-radius:12px;border:1px solid #22314f}");
+  html += F("table{width:100%;border-collapse:collapse;background:#0b1220;min-width:760px}");
+  html += F("th,td{border:1px solid #22314f;padding:8px 8px;font-size:.95em;text-align:left;white-space:nowrap}");
   html += F("th{background:#172540;position:sticky;top:0;z-index:1}");
   html += F("td:last-child{white-space:normal;max-width:260px}");
   html += F("a{color:#a9cbff}");
-  html += F("@media(max-width:760px){header{font-size:1.05em}.wrap{padding:0 6px}.btn{flex:1;text-align:center}}");
+  html += F("@media(max-width:760px){header{font-size:1.15em}.wrap{padding:0 6px}.btn{flex:1;text-align:center}}");
   html += F("</style></head><body>");
 
-  html += F("<header>📜 Irrigation Event Log</header><div class='wrap'>");
+  html += F("<header>Irrigation Event Log</header><div class='wrap'>");
   html += F("<div class='toolbar'>");
   html += F("<a class='btn' href='/'>Home</a>");
   html += F("<a class='btn' href='/download/events.csv'>Download CSV</a>");
@@ -2855,7 +2898,7 @@ void handleLogPage() {
   html += F("</div>");
 
   html += F("<div class='table-wrap'><table><tr>");
-  html += F("<th>Time</th><th>Zone</th><th>Event</th><th>Source</th><th>RainDelay</th><th>Details</th></tr>");
+  html += F("<th>Time</th><th>Zone</th><th>Event</th><th>Source</th><th>Rain Delay</th><th>Details</th></tr>");
 
   while (f.available()) {
     String line=f.readStringUntil('\n');
@@ -2877,7 +2920,7 @@ void handleLogPage() {
     String city =(i9>=0)?line.substring(i9+1):"";
 
     String details = (temp.length()
-                      ? ("T="+temp+"°C, H="+hum+"%, W="+wind+"m/s, "+cond+" @ "+city)
+                      ? ("T="+temp+"C, H="+hum+"%, W="+wind+"m/s, "+cond+" @ "+city)
                       : "n/a");
 
     html += F("<tr><td>"); html += ts;
@@ -2911,22 +2954,23 @@ void handleTankCalibration() {
   String html; html.reserve(2000);
   html += F("<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>");
   html += F("<title>Tank Calibration</title>");
-  html += F("<style>body{font-family:Inter,system-ui,Segoe UI,Roboto,Arial,sans-serif;background:#0f1522;color:#e8eef6;margin:0}");
-  html += F(".wrap{max-width:520px;margin:30px auto;padding:0 12px}.card{background:#0b1220;border:1px solid #22314f;border-radius:14px;padding:18px 14px}");
-  html += F(".btn{background:#1976d2;color:#fff;border:none;border-radius:10px;padding:10px 14px;font-weight:600;cursor:pointer}.row{display:flex;gap:10px;justify-content:space-between;margin-top:10px}");
+  html += F("<style>body{font-family:'Trebuchet MS','Candara','Segoe UI',sans-serif;background:#0f1522;color:#e8eef6;margin:0;font-size:15px}");
+  html += F(".wrap{max-width:600px;margin:34px auto;padding:0 16px}.card{background:#0b1220;border:1px solid #22314f;border-radius:14px;padding:20px 16px}");
+  html += F("h2{margin:0 0 12px 0;font-size:1.4em;letter-spacing:.2px}");
+  html += F(".btn{background:#1976d2;color:#fff;border:none;border-radius:12px;padding:10px 16px;font-weight:600;cursor:pointer;font-size:.95rem}.row{display:flex;gap:12px;justify-content:space-between;margin-top:12px}");
   html += F(".btn{transition:transform .06s ease,box-shadow .06s ease,filter .06s ease}");
   html += F(".btn:active{transform:translateY(1px);box-shadow:inset 0 2px 6px rgba(0,0,0,.25)}");
   html += F(".btn{position:relative;overflow:hidden}");
   html += F(".ripple{position:absolute;border-radius:999px;transform:scale(0);background:rgba(255,255,255,.35);animation:ripple .5s ease-out;pointer-events:none}");
   html += F("@keyframes ripple{to{transform:scale(3.2);opacity:0;}}");
-  html += F("a{color:#a9cbff}</style></head><body><div class='wrap'><h2>🚰 Tank Calibration</h2><div class='card'>");
+  html += F("a{color:#a9cbff}</style></head><body><div class='wrap'><h2>Tank Calibration</h2><div class='card'>");
 
   html += F("<p>Raw: <b>"); html += String(raw); html += F("</b></p>");
-  html += F("<p>Calibrated range: <b>"); html += String(tankEmptyRaw); html += F("</b> → <b>"); html += String(tankFullRaw); html += F("</b></p>");
+  html += F("<p>Calibrated range: <b>"); html += String(tankEmptyRaw); html += F("</b> to <b>"); html += String(tankFullRaw); html += F("</b></p>");
   html += F("<p>Level: <b>"); html += String(pct); html += F("%</b></p>");
   html += F("<div class='row'><form method='POST' action='/setTankEmpty'><button class='btn' type='submit'>Set Empty</button></form>");
   html += F("<form method='POST' action='/setTankFull'><button class='btn' type='submit'>Set Full</button></form></div>");
-  html += F("<p><a href='/'>Home</a> · <a href='/setup'>Setup</a></p></div></div>");
+  html += F("<p><a href='/'>Home</a> | <a href='/setup'>Setup</a></p></div></div>");
   html += F("<script>");
   html += F("function addRipple(e){const t=e.currentTarget; if(t.disabled) return; const rect=t.getBoundingClientRect();");
   html += F("const size=Math.max(rect.width,rect.height); const x=(e.clientX|| (rect.left+rect.width/2)) - rect.left - size/2;");
@@ -3030,7 +3074,7 @@ void loadConfig() {
   if (f.available()) { if ((s = _safeReadLine(f)).length()) mqttPass    = s; }
   if (f.available()) { if ((s = _safeReadLine(f)).length()) mqttBase    = s; }
 
-  // ✅ NEW: relay polarity (optional trailing line, backwards compatible)
+  // NEW: relay polarity (optional trailing line, backwards compatible)
   if (f.available()) { 
     if ((s = _safeReadLine(f)).length()) 
       relayActiveHigh = (s.toInt() == 1);
@@ -3065,7 +3109,7 @@ void saveConfig() {
   f.println(rainSensorInvert ? 1 : 0);
   f.println(tankLowThresholdPct);
 
-  // ❌ REMOVE this line from here (it breaks the alignment!)
+  // NOTE: keep this line commented out (it breaks the alignment).
   // f.println(relayActiveHigh ? 1 : 0);
 
   for (int i = 0; i < MAX_ZONES; i++) f.println(zonePins[i]);
@@ -3104,7 +3148,7 @@ void saveConfig() {
   f.println(mqttPass);
   f.println(mqttBase);
 
-  // ✅ NEW: relay polarity written as trailing line to match loadConfig()
+  // NEW: relay polarity written as trailing line to match loadConfig()
   f.println(relayActiveHigh ? 1 : 0);
 
   f.close();
@@ -3203,7 +3247,7 @@ void handleConfigure() {
     if (windSpeedThreshold < 0) windSpeedThreshold = 0;
   }
 
-  // Rain cooldown (hours → minutes + uint8)
+  // Rain cooldown (hours -> minutes + uint8)
   if (server.hasArg("rainCooldownHours")) {
     int h = server.arg("rainCooldownHours").toInt();
     if (h < 0) h = 0;
@@ -3237,7 +3281,7 @@ void handleConfigure() {
         pauseUntilEpoch = 0;
       }
     } else {
-      // Checkbox not ticked ⇒ clear pause
+      // Checkbox not ticked -> clear pause
       systemPaused    = false;
       pauseUntilEpoch = 0;
     }
@@ -3368,3 +3412,6 @@ void handleClearEvents() {
   server.sendHeader("Location", "/events", true);
   server.send(302, "text/plain", "");
 }
+
+
+
