@@ -6,7 +6,7 @@
   server.on("/whereami", HTTP_GET, handleWhereAmI);
 #endif
 #ifndef ENABLE_OTA
-  #define ENABLE_OTA 0   
+  #define ENABLE_OTA 0
 #endif
 #include <Arduino.h>
 #include <ArduinoJson.h>
@@ -65,13 +65,19 @@ uint8_t zonePins[MAX_ZONES] = {18, 19, 12, 13, 25, 26};
 uint8_t mainsPin = 25;
 uint8_t tankPin  = 26;
 
-const int LED_PIN  = 2;
+const int LED_PIN  = 4;
 const int TANK_PIN = 36; // ADC1_CH0
 
 // Physical rain sensor
 bool rainSensorEnabled = false;
 bool rainSensorInvert  = false;
 int  rainSensorPin     = 27;
+
+// Physical manual control buttons (disabled by default)
+int manualSelectPin = -1;   // cycles the target zone (INPUT_PULLUP, -1 = disabled)
+int manualStartPin  = -1;   // toggles start/stop for the selected zone (INPUT_PULLUP, -1 = disabled)
+uint8_t manualSelectedZone = 0;
+const unsigned long MANUAL_BTN_DEBOUNCE_MS = 60;
 
 // ---------- Config / State ----------
 String apiKey, city; // OpenWeather (city = city ID)
@@ -221,6 +227,9 @@ void printCurrentTime();
 int    tankPercent();
 bool   isTankLow();
 String sourceModeText();
+void initManualButtons();
+void tickManualButtons();
+void showManualSelection();
 
 
 // ===================== Timezone config =====================
@@ -527,6 +536,7 @@ void setup() {
   loadConfig();
   if (!LittleFS.exists("/schedule.txt")) saveSchedule();
   loadSchedule();
+  initManualButtons();
 
   mainsChannel = P4; 
   tankChannel  = P5;
@@ -879,6 +889,7 @@ void loop() {
   checkWindRain();
   mqttEnsureConnected();
   mqttPublishStatus();
+  tickManualButtons();
 
   // Hard block while paused/master off/cooldown
   if (isBlockedNow()) {
@@ -989,6 +1000,75 @@ void initGpioFallback() {
 
   gpioInitOutput(mainsPin);         // OFF
   gpioInitOutput(tankPin);          // OFF
+}
+
+// ---------- Manual hardware buttons (select + start/stop) ----------
+void showManualSelection() {
+  display.clearDisplay();
+  display.setTextSize(2);
+  display.setCursor(0, 0);
+  display.print("Manual");
+  display.setCursor(0, 24);
+  display.print("Zone ");
+  display.print((int)manualSelectedZone + 1);
+  display.display();
+}
+
+void initManualButtons() {
+  if (manualSelectedZone >= zonesCount) manualSelectedZone = 0;
+
+  if (manualSelectPin >= 0 && manualSelectPin <= 39) {
+    pinMode(manualSelectPin, INPUT_PULLUP);
+  } else {
+    manualSelectPin = -1;
+  }
+
+  if (manualStartPin >= 0 && manualStartPin <= 39) {
+    pinMode(manualStartPin, INPUT_PULLUP);
+  } else {
+    manualStartPin = -1;
+  }
+}
+
+void tickManualButtons() {
+  const uint32_t nowMs = millis();
+  if (zonesCount == 0) return;
+  manualSelectedZone = manualSelectedZone % zonesCount;
+
+  // Select button: cycle target zone
+  static int lastSelState = HIGH;
+  static uint32_t lastSelChange = 0;
+  if (manualSelectPin >= 0) {
+    int s = digitalRead(manualSelectPin);
+    if (s != lastSelState && (nowMs - lastSelChange) > MANUAL_BTN_DEBOUNCE_MS) {
+      lastSelChange = nowMs;
+      lastSelState = s;
+      if (s == LOW) {
+        manualSelectedZone = (manualSelectedZone + 1) % zonesCount;
+        Serial.printf("[BTN] Manual select -> Z%d\n", manualSelectedZone + 1);
+        showManualSelection();
+      }
+    }
+  }
+
+  // Start/stop button: toggle the selected zone
+  static int lastStartState = HIGH;
+  static uint32_t lastStartChange = 0;
+  if (manualStartPin >= 0) {
+    int s = digitalRead(manualStartPin);
+    if (s != lastStartState && (nowMs - lastStartChange) > MANUAL_BTN_DEBOUNCE_MS) {
+      lastStartChange = nowMs;
+      lastStartState = s;
+      if (s == LOW) {
+        uint8_t z = manualSelectedZone % zonesCount;
+        if (zoneActive[z]) {
+          turnOffValveManual(z);
+        } else {
+          turnOnValveManual(z);
+        }
+      }
+    }
+  }
 }
 
 // ---------- Weather / Forecast ----------
@@ -2111,17 +2191,20 @@ html += F("</b></a></div>");
 
     // Actions
     html += F("<div class='toolbar' style='margin-top:6px;justify-content:flex-end'>");
-    if (zoneActive[z]) {
-      html += F("<button type='button' class='btn' disabled>▶️ On</button>");
-      html += F("<button type='button' class='btn btn-danger' onclick='toggleZone(");
-      html += String(z);
-      html += F(",0)'>⏹ Off</button>");
-    } else {
-      html += F("<button type='button' class='btn' onclick='toggleZone(");
-      html += String(z);
-      html += F(",1)'>▶️ On</button>");
-      html += F("<button type='button' class='btn btn-danger' disabled>⏹ Off</button>");
-    }
+    html += F("<button type='button' class='btn' id='zone-");
+    html += String(z);
+    html += F("-on' onclick='toggleZone(");
+    html += String(z);
+    html += F(",1)'");
+    if (zoneActive[z]) html += F(" disabled");
+    html += F(">On</button>");
+    html += F("<button type='button' class='btn btn-danger' id='zone-");
+    html += String(z);
+    html += F("-off' onclick='toggleZone(");
+    html += String(z);
+    html += F(",0)'");
+    if (!zoneActive[z]) html += F(" disabled");
+    html += F(">Off</button>");
     html += F("</div>"); // .toolbar
 
     html += F("</div>"); // .zone-card
@@ -2158,16 +2241,16 @@ html += F("</b></a></div>");
   html += F("return fetch(url,{method:'POST',headers:{'Content-Type':'application/json','Cache-Control':'no-cache'},body});}");
   html += F("async function postForm(url, body){const opts={method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'}};");
   html += F("if(body)opts.body=body; return fetch(url,opts);} ");
-  html += F("async function toggleZone(z,on){if(_busy)return;_busy=true;try{await postJson('/valve/'+(on?'on/':'off/')+z,{t:Date.now()});setTimeout(()=>location.reload(),150);}catch(e){console.error(e);}finally{_busy=false;}}");
+  html += F("async function toggleZone(z,on){if(_busy)return;_busy=true;try{await postJson('/valve/'+(on?'on/':'off/')+z,{t:Date.now()});setTimeout(refreshStatus,200);}catch(e){console.error(e);}finally{_busy=false;}}");
 
   html += F("const btnBack=document.getElementById('toggle-backlight-btn');");
   html += F("if(btnBack){btnBack.addEventListener('click',async()=>{if(_busy)return;_busy=true;try{await postJson('/toggleBacklight',{t:Date.now()});}catch(e){}finally{_busy=false;}});} ");
   html += F("const btnReboot=document.getElementById('rebootBtn');");
   html += F("if(btnReboot){btnReboot.addEventListener('click',async()=>{if(confirm('Reboot controller now?')){try{await postJson('/reboot',{t:Date.now()});}catch(e){}}});} ");
-  html += F("document.getElementById('btn-clear-delays')?.addEventListener('click',async()=>{await postForm('/clear_delays','a=1');setTimeout(()=>location.reload(),150);});");
-  html += F("document.getElementById('btn-pause-24')?.addEventListener('click',async()=>{await postForm('/pause','sec=86400');setTimeout(()=>location.reload(),200);});");
-  html += F("document.getElementById('btn-pause-7d')?.addEventListener('click',async()=>{await postForm('/pause','sec='+(7*86400));setTimeout(()=>location.reload(),200);});");
-  html += F("document.getElementById('btn-resume')?.addEventListener('click',async()=>{await postForm('/resume','x=1');setTimeout(()=>location.reload(),150);});");
+  html += F("document.getElementById('btn-clear-delays')?.addEventListener('click',async()=>{await postForm('/clear_delays','a=1');setTimeout(refreshStatus,200);});");
+  html += F("document.getElementById('btn-pause-24')?.addEventListener('click',async()=>{await postForm('/pause','sec=86400');setTimeout(refreshStatus,200);});");
+  html += F("document.getElementById('btn-pause-7d')?.addEventListener('click',async()=>{await postForm('/pause','sec='+(7*86400));setTimeout(refreshStatus,200);});");
+  html += F("document.getElementById('btn-resume')?.addEventListener('click',async()=>{await postForm('/resume','x=1');setTimeout(refreshStatus,200);});");
 
   // Master pill
   html += F("const btnMaster=document.getElementById('btn-master');");
@@ -2219,6 +2302,8 @@ html += F("</b></a></div>");
   html += F("if(stateEl){stateEl.className='badge '+(z.active?'b-ok':'');stateEl.innerHTML=z.active?'▶︎ Running':'⏹ Off';}");
   html += F("if(remEl){ if(z.active){ const r=z.remaining||0; const rm=Math.floor(r/60),rs=r%60; remEl.textContent=rm+'m '+(rs<10?'0':'')+rs+'s left'; } else remEl.textContent='—'; }");
   html += F("if(barEl){ let p=0; const total=z.totalSec||0; const rem=z.remaining||0; p=total>0?Math.max(0,Math.min(100,Math.round(100*(total-rem)/total))):0; barEl.style.width=p+'%'; }");
+  html += F("const onBtn=document.getElementById('zone-'+idx+'-on'); const offBtn=document.getElementById('zone-'+idx+'-off');");
+  html += F("if(onBtn) onBtn.disabled=!!z.active; if(offBtn) offBtn.disabled=!z.active;");
   html += F("}); }");
 
   // Weather stats
@@ -2447,6 +2532,19 @@ void handleSetupPage() {
   html += F("<small>Checked = LOW = ON (active-low relay modules). Unchecked = HIGH = ON.</small></div>");
 
   html += F("</div></div>");
+
+  // Manual buttons
+  html += F("<div class='card'><h3>Manual Buttons</h3>");
+  html += F("<div class='row switchline'><label>Select Button Pin</label><input type='number' min='-1' max='39' name='manualSelectPin' value='");
+  html += String(manualSelectPin);
+  html += F("'><small>-1 to disable. Uses INPUT_PULLUP; press = LOW.</small></div>");
+  html += F("<div class='row switchline'><label>Start/Stop Button Pin</label><input type='number' min='-1' max='39' name='manualStartPin' value='");
+  html += String(manualStartPin);
+  html += F("'><small>Toggles the selected zone on/off.</small></div>");
+  html += F("<div class='row'><label>Selected Zone</label><div class='sub'>Z");
+  html += String(manualSelectedZone + 1);
+  html += F(" (cycles with Select button)</div></div>");
+  html += F("</div>");
 
 
   // Timezone
@@ -2799,6 +2897,18 @@ void loadConfig() {
   }
   if ((s = _safeReadLine(f)).length()) mainsPin = s.toInt();
   if ((s = _safeReadLine(f)).length()) tankPin  = s.toInt();
+  if (f.available()) {
+    if ((s = _safeReadLine(f)).length()) {
+      int p = s.toInt();
+      manualSelectPin = (p >= -1 && p <= 39) ? p : -1;
+    }
+  }
+  if (f.available()) {
+    if ((s = _safeReadLine(f)).length()) {
+      int p = s.toInt();
+      manualStartPin = (p >= -1 && p <= 39) ? p : -1;
+    }
+  }
 
   // Zone names
   for (int i = 0; i < MAX_ZONES && f.available(); i++) {
@@ -2871,6 +2981,8 @@ void saveConfig() {
   for (int i = 0; i < MAX_ZONES; i++) f.println(zonePins[i]);
   f.println(mainsPin);
   f.println(tankPin);
+  f.println(manualSelectPin);
+  f.println(manualStartPin);
 
   for (int i = 0; i < MAX_ZONES; i++) f.println(zoneNames[i]);
 
@@ -2975,6 +3087,7 @@ void handleConfigure() {
     String zm = server.arg("zonesMode");
     zonesCount = (zm == "6") ? 6 : 4;
   }
+  if (manualSelectedZone >= zonesCount) manualSelectedZone = 0;
 
   // Run mode (sequential vs concurrent)
   runZonesConcurrent = server.hasArg("runConcurrent");
@@ -3079,6 +3192,14 @@ void handleConfigure() {
     int p = server.arg("tankPin").toInt();
     if (p >= 0 && p <= 39) tankPin = p;
   }
+  if (server.hasArg("manualSelectPin")) {
+    int p = server.arg("manualSelectPin").toInt();
+    if ((p >= -1 && p <= 39)) manualSelectPin = p;
+  }
+  if (server.hasArg("manualStartPin")) {
+    int p = server.arg("manualStartPin").toInt();
+    if ((p >= -1 && p <= 39)) manualStartPin = p;
+  }
 
   // NEW: polarity setting
   gpioActiveLow = server.hasArg("gpioActiveLow"); 
@@ -3114,6 +3235,7 @@ void handleConfigure() {
 
   // Persist and re-apply runtime things
   saveConfig();
+  initManualButtons();
 
     // --- NEW: if API key or City ID changed, force a weather refresh ---
   if (apiKey != oldApiKey || city != oldCity) {
