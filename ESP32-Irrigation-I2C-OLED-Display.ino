@@ -6,7 +6,7 @@
   server.on("/whereami", HTTP_GET, handleWhereAmI);
 #endif
 #ifndef ENABLE_OTA
-  #define ENABLE_OTA 0
+  #define ENABLE_OTA 1
 #endif
 #include <Arduino.h>
 #include <ArduinoJson.h>
@@ -86,12 +86,12 @@ String cachedWeatherData;
 
 // Weather cache / metrics
 unsigned long lastWeatherUpdate = 0;
-const unsigned long weatherUpdateInterval = 60UL * 60UL * 1000UL; // 1h
+const unsigned long weatherUpdateInterval = 15UL * 60UL * 1000UL; // 15m
 
 // Forecast cache / metrics
 String cachedForecastData;
 unsigned long lastForecastUpdate = 0;
-const unsigned long forecastUpdateInterval = 30UL * 60UL * 1000UL;
+const unsigned long forecastUpdateInterval = 60UL * 60UL * 1000UL; // 60m
 float rainNext12h_mm = NAN;
 float rainNext24h_mm = NAN;
 int   popNext12h_pct = -1;
