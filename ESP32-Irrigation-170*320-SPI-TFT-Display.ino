@@ -25,10 +25,10 @@
 #include <HTTPClient.h>
 #include <Wire.h>
 #include <LittleFS.h>
-#include <PCF8574.h>
+#include <PCF8574.h> // (Must use Library from Github)
 #include <Adafruit_GFX.h>
 #include <SPI.h>
-#include <Adafruit_ST7789.h>
+#include <Adafruit_ST7789.h> // (Adafruit ST7735 and ST7789 Library)
 #include <math.h>
 extern "C" {
   #include "esp_log.h"
@@ -131,9 +131,9 @@ bool relayActiveHigh = true;
 uint8_t zonePins[MAX_ZONES] = {18, 19, 12, 14, 25, 26};
 uint8_t mainsPin = 25;
 uint8_t tankPin  = 26;
+int tankLevelPin = 36; // ADC1_CH0
 
 const int LED_PIN  = 2;
-const int TANK_PIN = 36; // ADC1_CH0
 
 // Physical rain sensor
 bool rainSensorEnabled = false;
@@ -439,7 +439,7 @@ static String cleanName(String s) {
 
 int tankPercent() {
   const int N=8; uint32_t acc=0;
-  for (int i=0;i<N;i++){ acc += analogRead(TANK_PIN); delayMicroseconds(200); }
+  for (int i=0;i<N;i++){ acc += analogRead(tankLevelPin); delayMicroseconds(200); }
   int raw=acc/N;
   int pct = map(raw, tankEmptyRaw, tankFullRaw, 0, 100);
   return constrain(pct, 0, 100);
@@ -913,14 +913,14 @@ TFTSPI.begin(TFT_SCLK, -1, TFT_MOSI, TFT_CS);
   // Tank calibration endpoints
   server.on("/setTankEmpty", HTTP_POST, []() {
     HttpScope _scope;
-    tankEmptyRaw = analogRead(TANK_PIN);
+    tankEmptyRaw = analogRead(tankLevelPin);
     saveConfig();
     server.sendHeader("Location", "/tank", true);
     server.send(302, "text/plain", "");
   });
   server.on("/setTankFull", HTTP_POST, []() {
     HttpScope _scope;
-    tankFullRaw = analogRead(TANK_PIN);
+    tankFullRaw = analogRead(tankLevelPin);
     saveConfig();
     server.sendHeader("Location", "/tank", true);
     server.send(302, "text/plain", "");
@@ -3153,6 +3153,38 @@ void handleSetupPage() {
   html += F("> Run Zones Together</label><small>Unchecked = One at a time</small></div>");
   html += F("</div>");
 
+  if (zonesCount == 4) {
+    // Tank
+    html += F("<div class='card'><h3>Tank</h3>");
+    html += F("<div class='row switchline'><label>Water Source</label>");
+
+    // Auto
+    html += F("<label><input type='radio' name='waterMode' value='auto' ");
+    if (!justUseTank && !justUseMains) html += F("checked");
+    html += F("> Auto (Tank + Mains)</label>");
+
+    // Only Tank
+    html += F("<label><input type='radio' name='waterMode' value='tank' ");
+    if (justUseTank) html += F("checked");
+    html += F("> Only Tank</label>");
+
+    // Only Mains
+    html += F("<label><input type='radio' name='waterMode' value='mains' ");
+    if (justUseMains) html += F("checked");
+    html += F("> Only Mains</label>");
+
+    html += F("<small>(4-zone Tank/Mains mode only)</small></div>");
+
+    html += F("<div class='row'><label>Tank Low Threshold (%)</label>"
+              "<input class='in-xs' type='number' min='0' max='100' name='tankThresh' value='");
+    html += String(tankLowThresholdPct);
+    html += F("'><small>Switch to mains if tank below this level</small></div>");
+
+    html += F("<div class='row'><label>Tank Level Sensor Pin</label><input class='in-xs' type='number' min='0' max='39' name='tankLevelPin' value='");
+    html += String(tankLevelPin); html += F("'><small>ADC input (e.g. 36)</small></div>");
+    html += F("</div>");
+  }
+
   // Physical rain & forecast
   html += F("<div class='card'><h3>Rain Sources</h3>");
   html += F("<div class='row switchline'><label>Disable OWM Rain</label><input type='checkbox' name='rainForecastDisabled' ");
@@ -3205,32 +3237,8 @@ void handleSetupPage() {
 
   html += F("</div>"); // end cols2
 
-  // Tank/Mains
-  html += F("<hr class='hr'><div class='row switchline'><label>Water Source</label>");
-
-  // Auto
-  html += F("<label><input type='radio' name='waterMode' value='auto' ");
-  if (!justUseTank && !justUseMains) html += F("checked");
-  html += F("> Auto (Tank + Mains)</label>");
-
-  // Only Tank
-  html += F("<label><input type='radio' name='waterMode' value='tank' ");
-  if (justUseTank) html += F("checked");
-  html += F("> Only Tank</label>");
-
-  // Only Mains
-  html += F("<label><input type='radio' name='waterMode' value='mains' ");
-  if (justUseMains) html += F("checked");
-  html += F("> Only Mains</label>");
-
-  html += F("<small>(4-zone Tank/Mains mode only)</small></div>");
-
-  html += F("<div class='row'><label>Tank Low Threshold (%)</label>"
-            "<input class='in-xs' type='number' min='0' max='100' name='tankThresh' value='");
-  html += String(tankLowThresholdPct);
-  html += F("'><small>Switch to mains if tank below this level</small></div>");
-
   // Quick actions
+  html += F("<hr class='hr'>");
   html += F("<div class='row' style='gap:8px;flex-wrap:wrap;margin-top:6px'>");
   html += F("<button class='btn' type='button' id='btn-toggle-backlight'>Toggle LCD</button>");
   html += F("</div>");
@@ -3254,8 +3262,8 @@ void handleSetupPage() {
   }
   html += F("<div class='row'><label>Main Pin</label><input class='in-xs' type='number' min='0' max='39' name='mainsPin' value='");
   html += String(mainsPin); html += F("'><small>4-zone fallback</small></div>");
-  html += F("<div class='row'><label>Tank Pin</label><input class='in-xs' type='number' min='0' max='39' name='tankPin' value='");
-  html += String(tankPin); html += F("'><small>4-zone fallback</small></div>");
+  html += F("<div class='row'><label>Tank Relay Pin</label><input class='in-xs' type='number' min='0' max='39' name='tankPin' value='");
+  html += String(tankPin); html += F("'><small>4-zone fallback relay</small></div>");
 
   // NEW: GPIO active polarity
   html += F("<div class='row switchline'><label>GPIO Active Low</label>");
@@ -3584,7 +3592,7 @@ void handleLogPage() {
 // ---------- Tank Calibration Page ----------
 void handleTankCalibration() {
   HttpScope _scope;
-  int raw=analogRead(TANK_PIN);
+  int raw=analogRead(tankLevelPin);
   int pct=tankPercent();
 
   String html; html.reserve(2000);
@@ -3722,6 +3730,14 @@ void loadConfig() {
       gpioActiveLow = (s.toInt() == 1);
   }
 
+  // NEW: tank level sensor pin (ADC)
+  if (f.available()) {
+    if ((s = _safeReadLine(f)).length()) {
+      int p = s.toInt();
+      if (p >= 0 && p <= 39) tankLevelPin = p;
+    }
+  }
+
   f.close();
 
   // Derive hours from minutes (for UI & cooldown logic)
@@ -3794,6 +3810,8 @@ void saveConfig() {
   f.println(relayActiveHigh ? 1 : 0);
   // NEW: persist GPIO polarity for fallback mode
   f.println(gpioActiveLow ? 1 : 0);
+  // NEW: tank level sensor pin (ADC)
+  f.println(tankLevelPin);
 
   f.close();
 }
@@ -3967,6 +3985,10 @@ void handleConfigure() {
   if (server.hasArg("tankPin")) {
     int p = server.arg("tankPin").toInt();
     if (p >= 0 && p <= 39) tankPin = p;
+  }
+  if (server.hasArg("tankLevelPin")) {
+    int p = server.arg("tankLevelPin").toInt();
+    if (p >= 0 && p <= 39) tankLevelPin = p;
   }
   if (server.hasArg("manualSelectPin")) {
     int p = server.arg("manualSelectPin").toInt();
