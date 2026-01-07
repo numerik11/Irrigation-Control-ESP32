@@ -9,7 +9,7 @@
   server.on("/whereami", HTTP_GET, handleWhereAmI);
 #endif
 #ifndef ENABLE_OTA
-  #define ENABLE_OTA 1   
+  #define ENABLE_OTA 0  
 #endif
 #ifndef TFT_MISO
   #define TFT_MISO -1   // ST7789 typically doesn't use MISO
@@ -515,6 +515,11 @@ String rainDelayCauseText() {
 }
 
 static const char* kHost = "espirrigation";
+static const bool kUseStaticIP = true;
+static const IPAddress kStaticIP(192, 168, 1, 123);
+static const IPAddress kGateway(192, 168, 1, 1);
+static const IPAddress kSubnet(255, 255, 255, 0);
+static const IPAddress kDns(192, 168, 1, 1);
 
 static void mdnsStart() {
   MDNS.end(); // in case it was running
@@ -709,6 +714,9 @@ TFTSPI.begin(TFT_SCLK, -1, TFT_MOSI, TFT_CS);
   WiFi.setHostname(kHost);
 
   // WiFiManager connect
+  if (kUseStaticIP) {
+    wifiManager.setSTAStaticIPConfig(kStaticIP, kGateway, kSubnet, kDns);
+  }
   wifiManager.setTimeout(180);
   if (!wifiManager.autoConnect("ESPIrrigationAP")) {
     ESP.restart();
@@ -1286,18 +1294,23 @@ void tickManualButtons() {
 
 // ---------- Weather / Forecast ----------
 String fetchWeather() {
-  if (apiKey.length()<5 || city.length()<1) return "{}";
+  if (apiKey.length()<5 || city.length()<1) return "";
   HTTPClient http; 
   http.setTimeout(2500); // NEW: shorter timeout
   String url="http://api.openweathermap.org/data/2.5/weather?id="+city+"&appid="+apiKey+"&units=metric";
   http.begin(client,url);
   int code=http.GET();
-  String payload=(code>0)?http.getString():"{}";
-  http.end(); return payload;
+  if (code != 200) {
+    http.end();
+    return "";
+  }
+  String payload = http.getString();
+  http.end();
+  return payload;
 }
 
 String fetchForecast(float lat, float lon) {
-  if (apiKey.length() < 5) return "{}";
+  if (apiKey.length() < 5) return "";
   HTTPClient http; 
   http.setTimeout(3000); // NEW: shorter timeout
 
@@ -1308,7 +1321,11 @@ String fetchForecast(float lat, float lon) {
 
   http.begin(client, url);
   int code = http.GET();
-  String payload = (code > 0) ? http.getString() : "{}";
+  if (code != 200) {
+    http.end();
+    return "";
+  }
+  String payload = http.getString();
   http.end();
   return payload;
 }
@@ -1365,7 +1382,13 @@ void updateCachedWeather() {
                   (nowms - lastWeatherUpdate >= weatherUpdateInterval));
   bool haveCoord = false; float lat = NAN, lon = NAN;
 
-  if (needCur) { cachedWeatherData = fetchWeather(); lastWeatherUpdate = nowms; }
+  if (needCur) {
+    String fresh = fetchWeather();
+    if (fresh.length() > 0) {
+      cachedWeatherData = fresh;
+      lastWeatherUpdate = nowms;
+    }
+  }
 
   // Extract coordinates and 1h rain
   {
@@ -1388,83 +1411,97 @@ void updateCachedWeather() {
         }
       }
       rain1hNow = r1;
+    } else {
+      rain1hNow = 0.0f;
     }
   }
 
   // ---- Forecast fetch / parse ----
   if (haveCoord && (cachedForecastData == "" || (nowms - lastForecastUpdate >= forecastUpdateInterval))) {
-    cachedForecastData = fetchForecast(lat, lon);
-    lastForecastUpdate = nowms;
+    String freshFc = fetchForecast(lat, lon);
+    if (freshFc.length() > 0) {
+      cachedForecastData = freshFc;
+      lastForecastUpdate = nowms;
 
-    rainNext12h_mm = 0; 
-    rainNext24h_mm = 0; 
-    popNext12h_pct = 0; 
-    nextRainIn_h   = -1;
-    maxGust24h_ms  = 0; 
-    todayMin_C     = NAN; 
-    todayMax_C     = NAN; 
-    todaySunrise   = 0;   
-    todaySunset    = 0;
+      rainNext12h_mm = 0; 
+      rainNext24h_mm = 0; 
+      popNext12h_pct = 0; 
+      nextRainIn_h   = -1;
+      maxGust24h_ms  = 0; 
+      todayMin_C     = NAN; 
+      todayMax_C     = NAN; 
+      todaySunrise   = 0;   
+      todaySunset    = 0;
 
-    DynamicJsonDocument fc(14 * 1024);
-    if (deserializeJson(fc, cachedForecastData) == DeserializationError::Ok) {
-      if (fc["daily"].is<JsonArray>() && fc["daily"].size() > 0) {
-        JsonObject d0 = fc["daily"][0];
-        todayMin_C   = d0["temp"]["min"] | NAN;
-        todayMax_C   = d0["temp"]["max"] | NAN;
-        todaySunrise = (time_t)(d0["sunrise"] | 0);
-        todaySunset  = (time_t)(d0["sunset"]  | 0);
-      }
-      auto read1h = [](JsonVariant v) -> float {
-        if (v.isNull()) return 0.0f;
-        if (v.is<float>() || v.is<double>() || v.is<int>()) return v.as<float>();
-        JsonVariant one = v["1h"];
-        return one.isNull() ? 0.0f : one.as<float>();
-      };
-      if (fc["hourly"].is<JsonArray>()) {
-        JsonArray hr = fc["hourly"].as<JsonArray>();
-        int hrs = hr.size();
-        int L24 = min(24, hrs);
-        int L12 = min(12, hrs);
-        for (int i = 0; i < L24; i++) {
-          JsonObject h = hr[i];
-          float r = 0.0f;
-          r += read1h(h["rain"]);
-          r += read1h(h["snow"]);
-          if (i < L12) {
-            rainNext12h_mm += r;
-            int pop = (int)roundf(100.0f * (h["pop"] | 0.0f));
-            if (pop > popNext12h_pct) popNext12h_pct = pop;
+      DynamicJsonDocument fc(14 * 1024);
+      if (deserializeJson(fc, cachedForecastData) == DeserializationError::Ok) {
+        if (fc["daily"].is<JsonArray>() && fc["daily"].size() > 0) {
+          JsonObject d0 = fc["daily"][0];
+          todayMin_C   = d0["temp"]["min"] | NAN;
+          todayMax_C   = d0["temp"]["max"] | NAN;
+          todaySunrise = (time_t)(d0["sunrise"] | 0);
+          todaySunset  = (time_t)(d0["sunset"]  | 0);
+        }
+        auto read1h = [](JsonVariant v) -> float {
+          if (v.isNull()) return 0.0f;
+          if (v.is<float>() || v.is<double>() || v.is<int>()) return v.as<float>();
+          JsonVariant one = v["1h"];
+          return one.isNull() ? 0.0f : one.as<float>();
+        };
+        if (fc["hourly"].is<JsonArray>()) {
+          JsonArray hr = fc["hourly"].as<JsonArray>();
+          int hrs = hr.size();
+          int L24 = min(24, hrs);
+          int L12 = min(12, hrs);
+          float hourlyMin = NAN;
+          float hourlyMax = NAN;
+          for (int i = 0; i < L24; i++) {
+            JsonObject h = hr[i];
+            float r = 0.0f;
+            r += read1h(h["rain"]);
+            r += read1h(h["snow"]);
+            float t = h["temp"] | NAN;
+            if (isfinite(t)) {
+              if (!isfinite(hourlyMin) || t < hourlyMin) hourlyMin = t;
+              if (!isfinite(hourlyMax) || t > hourlyMax) hourlyMax = t;
+            }
+            if (i < L12) {
+              rainNext12h_mm += r;
+              int pop = (int)roundf(100.0f * (h["pop"] | 0.0f));
+              if (pop > popNext12h_pct) popNext12h_pct = pop;
+            }
+            rainNext24h_mm += r;
+            if (nextRainIn_h < 0) {
+              float popf = h["pop"] | 0.0f;
+              if (r > 0.01f || popf >= 0.5f) nextRainIn_h = i;
+            }
+            float g = h["wind_gust"] | 0.0f;
+            if (g > maxGust24h_ms) maxGust24h_ms = g;
           }
-          rainNext24h_mm += r;
-          if (nextRainIn_h < 0) {
-            float popf = h["pop"] | 0.0f;
-            if (r > 0.01f || popf >= 0.5f) nextRainIn_h = i;
+          if (!isfinite(todayMin_C) && isfinite(hourlyMin)) todayMin_C = hourlyMin;
+          if (!isfinite(todayMax_C) && isfinite(hourlyMax)) todayMax_C = hourlyMax;
+        }
+        if (rainNext24h_mm <= 0.0f && fc["daily"].is<JsonArray>() && fc["daily"].size() > 0) {
+          JsonObject d0 = fc["daily"][0];
+          float dailyTotal = 0.0f;
+          if (!d0["rain"].isNull()) {
+            if (d0["rain"].is<float>() || d0["rain"].is<double>() || d0["rain"].is<int>())
+              dailyTotal += d0["rain"].as<float>();
           }
-          float g = h["wind_gust"] | 0.0f;
-          if (g > maxGust24h_ms) maxGust24h_ms = g;
+          if (!d0["snow"].isNull()) {
+            if (d0["snow"].is<float>() || d0["snow"].is<double>() || d0["snow"].is<int>())
+              dailyTotal += d0["snow"].as<float>();
+          }
+          if (dailyTotal > 0.0f) {
+            rainNext24h_mm = dailyTotal;
+            if (rainNext12h_mm <= 0.0f) rainNext12h_mm = dailyTotal * 0.5f;
+          }
         }
       }
-      if (rainNext24h_mm <= 0.0f && fc["daily"].is<JsonArray>() && fc["daily"].size() > 0) {
-        JsonObject d0 = fc["daily"][0];
-        float dailyTotal = 0.0f;
-        if (!d0["rain"].isNull()) {
-          if (d0["rain"].is<float>() || d0["rain"].is<double>() || d0["rain"].is<int>())
-            dailyTotal += d0["rain"].as<float>();
-        }
-        if (!d0["snow"].isNull()) {
-          if (d0["snow"].is<float>() || d0["snow"].is<double>() || d0["snow"].is<int>())
-            dailyTotal += d0["snow"].as<float>();
-        }
-        if (dailyTotal > 0.0f) {
-          rainNext24h_mm = dailyTotal;
-          if (rainNext12h_mm <= 0.0f) rainNext12h_mm = dailyTotal * 0.5f;
-        }
-      }
+      if (isnan(rainNext12h_mm) || rainNext12h_mm < 0) rainNext12h_mm = 0.0f;
+      if (isnan(rainNext24h_mm) || rainNext24h_mm < 0) rainNext24h_mm = 0.0f;
+      if (isnan(maxGust24h_ms)  || maxGust24h_ms  < 0) maxGust24h_ms  = 0.0f;
     }
-    if (isnan(rainNext12h_mm) || rainNext12h_mm < 0) rainNext12h_mm = 0.0f;
-    if (isnan(rainNext24h_mm) || rainNext24h_mm < 0) rainNext24h_mm = 0.0f;
-    if (isnan(maxGust24h_ms)  || maxGust24h_ms  < 0) maxGust24h_ms  = 0.0f;
   }
 
   // Fallback sunrise/sunset & min/max from current weather
@@ -3155,7 +3192,7 @@ void handleSetupPage() {
 
   if (zonesCount == 4) {
     // Tank
-    html += F("<div class='card'><h3>Tank</h3>");
+    html += F("<div class='card'><h3>Tank & Water Source</h3>");
     html += F("<div class='row switchline'><label>Water Source</label>");
 
     // Auto
@@ -3180,8 +3217,8 @@ void handleSetupPage() {
     html += String(tankLowThresholdPct);
     html += F("'><small>Switch to mains if tank below this level</small></div>");
 
-    html += F("<div class='row'><label>Tank Level Sensor Pin</label><input class='in-xs' type='number' min='0' max='39' name='tankLevelPin' value='");
-    html += String(tankLevelPin); html += F("'><small>ADC input (e.g. 36)</small></div>");
+    html += F("<div class='row'><label>Tank Sensor GPIO</label><input class='in-xs' type='number' min='0' max='39' name='tankLevelPin' value='");
+    html += String(tankLevelPin); html += F("'><small>ADC pin, e.g. 36 (GPIO36)</small></div>");
     html += F("</div>");
   }
 
@@ -3236,22 +3273,17 @@ void handleSetupPage() {
   html += F("</div>");
 
   html += F("</div>"); // end cols2
+  html += F("</div>"); // end Delays card
 
-  // Quick actions
-  html += F("<hr class='hr'>");
-  html += F("<div class='row' style='gap:8px;flex-wrap:wrap;margin-top:6px'>");
-  html += F("<button class='btn' type='button' id='btn-toggle-backlight'>Toggle LCD</button>");
-  html += F("</div>");
-
-  // Save / nav
-  html += F("<div class='row' style='gap:8px;margin-top:8px;flex-wrap:wrap'>");
+  // Actions
+  html += F("<div class='card'><h3>Actions</h3>");
+  html += F("<div class='row' style='gap:8px;flex-wrap:wrap'>");
   html += F("<button class='btn' type='submit'>Save</button>");
   html += F("<button class='btn-alt' formaction='/' formmethod='GET'>Home</button>");
   html += F("<button class='btn-alt' type='button' onclick=\"fetch('/clear_cooldown',{method:'POST'})\">Clear Cooldown</button>");
   html += F("<button class='btn-alt' formaction='/configure' formmethod='POST' name='resumeNow' value='1'>Resume Now</button>");
-  html += F("</div>");
-
-  html += F("</div>"); // end Delays card
+  html += F("<button class='btn-alt' type='button' id='btn-toggle-backlight'>Toggle LCD</button>");
+  html += F("</div></div>");
 
   // GPIO fallback pins
   html += F("<div class='card'><h3>GPIO Fallback (if I2C relays not found)</h3><div class='grid'>");
