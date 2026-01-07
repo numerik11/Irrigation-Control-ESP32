@@ -1,5 +1,3 @@
-// i2c OLED Display
-
 #ifndef ENABLE_DEBUG_ROUTES
   #define ENABLE_DEBUG_ROUTES 0   // set to 1 when you need them
 #endif
@@ -2112,9 +2110,9 @@ html += F("</b></a></div>");
 
 
 
-  html += F("<div class='card'><h3>Uptime</h3><div id='upChip' class='big'>--:--:--</div><div class='hint'>Since last boot</div></div>");
+  html += F("<div class='card'><h3>Local Time</h3><div id='upChip' class='big'>--:--:--</div><div class='hint'>Device timezone</div></div>");
 
-  html += F("<div class='card'><h3>Signal</h3><div id='rssiChip' class='big'>");
+  html += F("<div class='card'><h3>Wifi Signal</h3><div id='rssiChip' class='big'>");
   html += String(WiFi.RSSI()); html += F(" dBm</div><div class='hint'>Wi-Fi RSSI</div></div>");
 
   html += F("<div class='card'><h3>Tank Level</h3><div class='zone-head'>");
@@ -2373,7 +2371,13 @@ html += F("</b></a></div>");
   html += F("const h=pad(d.getHours()),m=pad(d.getMinutes()),s=pad(d.getSeconds());");
   html += F("const el=document.getElementById('clock'); if(el) el.textContent=h+':'+m+':'+s; _devEpoch++;};");
   html += F("draw(); _tickTimer=setInterval(draw,1000);} ");
-  html += F("function fmtUptime(sec){const h=Math.floor(sec/3600),m=Math.floor((sec%3600)/60),s=sec%60;return pad(h)+':'+pad(m)+':'+pad(s);} ");
+  html += F("function fmtClock12(epoch, offsetMin){");
+  html += F(" if(typeof epoch!=='number' || epoch<=0) return '--:--';");
+  html += F(" const t=new Date((epoch + (offsetMin||0)*60)*1000);");
+  html += F(" let h=t.getUTCHours(); const m=t.getUTCMinutes(); const s=t.getUTCSeconds();");
+  html += F(" const am=(h>=12)?'PM':'AM'; h=h%12; if(h===0) h=12;");
+  html += F(" return pad(h)+':'+pad(m)+':'+pad(s)+' '+am;");
+  html += F("} ");
   html += F("let _busy=false; async function postJson(url,payload){const body=payload?JSON.stringify(payload):\"{}\";");
   html += F("return fetch(url,{method:'POST',headers:{'Content-Type':'application/json','Cache-Control':'no-cache'},body});}");
   html += F("async function postForm(url, body){const opts={method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'}};");
@@ -2424,7 +2428,7 @@ html += F("</b></a></div>");
   html += F("const pct=st.tankPct||0; const tf=document.getElementById('tankFill'); const tl=document.getElementById('tankPctLabel');");
   html += F("if(tf) tf.style.width=Math.max(0,Math.min(100,pct))+'%'; if(tl) tl.textContent=pct+'%';");
   html += F("const src=document.getElementById('srcChip'); if(src) src.textContent=st.sourceMode||'';");
-  html += F("const up=document.getElementById('upChip'); if(up) up.textContent=fmtUptime(st.uptimeSec||0);");
+  html += F("const up=document.getElementById('upChip'); if(up) up.textContent=fmtClock12(st.deviceEpoch, st.utcOffsetMin);");
   html += F("const rssi=document.getElementById('rssiChip'); if(rssi) rssi.textContent=(st.rssi)+' dBm';");
   // NEW: Location chip + OpenWeatherMap link
   html += F("const cityEl=document.getElementById('cityName'); const cityLink=document.getElementById('owmLink');");
