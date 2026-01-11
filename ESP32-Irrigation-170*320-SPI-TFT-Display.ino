@@ -60,7 +60,7 @@ static constexpr int16_t TFT_H = 320;
 #define TFT_RST   17  // RST
 #define TFT_BL    32  // or -1 if tied to 3V3
 
-SPIClass TFTSPI(VSPI);
+SPIClass TFTSPI(SPI);
 Adafruit_ST7789 tft(&TFTSPI, TFT_CS, TFT_DC, TFT_RST);
 
 // ===================== UI helpers + palette (MUST be before RainScreen/HomeScreen) =====================
