@@ -3423,7 +3423,6 @@ void handleSetupPage() {
   html += F("<button class='btn' type='submit'>Save</button>");
   html += F("<button class='btn-alt' formaction='/' formmethod='GET'>Home</button>");
   html += F("<button class='btn-alt' type='button' onclick=\"fetch('/clear_cooldown',{method:'POST'})\">Clear Cooldown</button>");
-  html += F("<button class='btn-alt' formaction='/configure' formmethod='POST' name='resumeNow' value='1'>Unpause</button>");
   html += F("</div></div>");
 
   // Physical rain & forecast
@@ -3451,7 +3450,7 @@ void handleSetupPage() {
   html += F("<div class='row' style='gap:8px;flex-wrap:wrap'>");
   html += F("<button class='btn' type='button' id='btn-pause-24'>Pause 24h</button>");
   html += F("<button class='btn' type='button' id='btn-pause-7d'>Pause 7d</button>");
-  html += F("<button class='btn' type='button' id='btn-resume'>Resume</button>");
+  html += F("<button class='btn' type='button' id='btn-resume'>Unpause</button>");
   html += F("<div class='row'><label>Pause for (hours)</label><input class='in-sm' type='number' min='0' max='720' name='pauseHours' value='");
   time_t nowEp = time(nullptr);
   html += F("</div>");
