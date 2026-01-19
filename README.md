@@ -1,6 +1,6 @@
 ## ESP32 / ESP8266 1-16 Zone Irrigation Controller
 
-ESP32 or ESP8266–based irrigation controllers designed to drive up to 6 solenoid zones.
+ESP32 or ESP8266–based irrigation controllers designed to drive up to 16 solenoid zones.
 
 The system supports automatic tank/mains water source selection, live weather integration with rain and wind delays, and manual zone control, all managed through a local web interface at espirrigation.local.
 
