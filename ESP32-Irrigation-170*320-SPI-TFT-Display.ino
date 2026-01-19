@@ -3417,6 +3417,15 @@ void handleSetupPage() {
   html += F("</div>"); // end tankCard
   html += F("</div>");
 
+    // Actions
+  html += F("<div class='card'><h3>Actions</h3>");
+  html += F("<div class='row' style='gap:8px;flex-wrap:wrap'>");
+  html += F("<button class='btn' type='submit'>Save</button>");
+  html += F("<button class='btn-alt' formaction='/' formmethod='GET'>Home</button>");
+  html += F("<button class='btn-alt' type='button' onclick=\"fetch('/clear_cooldown',{method:'POST'})\">Clear Cooldown</button>");
+  html += F("<button class='btn-alt' formaction='/configure' formmethod='POST' name='resumeNow' value='1'>Unpause</button>");
+  html += F("</div></div>");
+
   // Physical rain & forecast
   html += F("<div class='card'><h3>Rain Sources</h3>");
   html += F("<div class='row switchline'><label>Disable OWM Rain</label><input type='checkbox' name='rainForecastDisabled' ");
@@ -3443,6 +3452,8 @@ void handleSetupPage() {
   html += F("<button class='btn' type='button' id='btn-pause-24'>Pause 24h</button>");
   html += F("<button class='btn' type='button' id='btn-pause-7d'>Pause 7d</button>");
   html += F("<button class='btn' type='button' id='btn-resume'>Resume</button>");
+  html += F("<div class='row'><label>Pause for (hours)</label><input class='in-sm' type='number' min='0' max='720' name='pauseHours' value='");
+  time_t nowEp = time(nullptr);
   html += F("</div>");
   html += F("<div class='row'><label>LCD Brightness (%)</label><input class='in-xs' type='number' id='tftLevel' min='0' max='100' value='100'><button class='btn' type='button' id='btn-tft-bright'>Set</button></div>");
   html += F("</div>");
@@ -3458,8 +3469,6 @@ void handleSetupPage() {
   html += F("<div class='row'><label>Rain Threshold 24h (mm)</label><input class='in-sm' type='number' min='0' max='200' name='rainThreshold24h' value='");
   html += String(rainThreshold24h_mm);
   html += F("'><small>Delay if >= threshold (24h total)</small></div>");
-  html += F("<div class='row'><label>Pause for (hours)</label><input class='in-sm' type='number' min='0' max='720' name='pauseHours' value='");
-  time_t nowEp = time(nullptr);
   {
     uint32_t remain = (pauseUntilEpoch > nowEp && systemPaused) ? (pauseUntilEpoch - nowEp) : 0;
     html += String(remain/3600);
@@ -3469,15 +3478,6 @@ void handleSetupPage() {
 
   html += F("</div>"); // end cols2
   html += F("</div>"); // end Delays card
-
-  // Actions
-  html += F("<div class='card'><h3>Actions</h3>");
-  html += F("<div class='row' style='gap:8px;flex-wrap:wrap'>");
-  html += F("<button class='btn' type='submit'>Save</button>");
-  html += F("<button class='btn-alt' formaction='/' formmethod='GET'>Home</button>");
-  html += F("<button class='btn-alt' type='button' onclick=\"fetch('/clear_cooldown',{method:'POST'})\">Clear Cooldown</button>");
-  html += F("<button class='btn-alt' formaction='/configure' formmethod='POST' name='resumeNow' value='1'>Unpause</button>");
-  html += F("</div></div>");
 
   // GPIO fallback pins
   html += F("<div class='card'><details class='collapse' ");
@@ -3515,7 +3515,6 @@ void handleSetupPage() {
   html += String(manualSelectedZone + 1);
   html += F(" (cycles with Select button)</div></div>");
   html += F("</div>");
-
 
   // Timezone
   html += F("<div class='card'><h3>Timezone</h3>");
