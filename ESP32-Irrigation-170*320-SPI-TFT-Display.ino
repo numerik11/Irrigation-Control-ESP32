@@ -2882,7 +2882,7 @@ html += F("</b></a></div>");
   html += F("<div class='grid' style='grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:6px'>");
   html += F("<div class='chip'><b>Low</b>&nbsp;<b id='tmin'>---</b> C</div>");
   html += F("<div class='chip'><b>High</b>&nbsp;<b id='tmax'>---</b> C</div>");
-  html += F("<div class='chip'><b>Pressure</b>&nbsp;<b id='press'>--</b> kPa</div>");
+  html += F("<div class='chip'><b>Pressure</b>&nbsp;<b id='press'>--</b> hPa</div>");
   html += F("<div class='chip'><span class='sub'>Sunrise</span>&nbsp;<b id='sunr'>--:--</b></div>");
   html += F("<div class='chip'><span class='sub'>Sunset</span>&nbsp;<b id='suns'>--:--</b></div>");
   html += F("</div></div>");
@@ -3208,7 +3208,7 @@ html += F("</b></a></div>");
   html += F("if(tmax) tmax.textContent=(st.tmax??0).toFixed(0);");
   html += F("if(sunr) sunr.textContent = st.sunriseLocal || '--:--';");
   html += F("if(suns) suns.textContent = st.sunsetLocal  || '--:--';");
-  html += F("if(press){ const p=st.pressure; press.textContent=(typeof p==='number' && p>0)?(p/10).toFixed(1):'--'; }");
+  html += F("if(press){ const p=st.pressure; press.textContent=(typeof p==='number' && p>0)?p.toFixed(0):'--'; }");
 
   // keep master pill synced
   html += F("const bm=document.getElementById('btn-master'); const ms=document.getElementById('master-state');");
