@@ -99,7 +99,7 @@ Free OpenWeatherMap API key → https://home.openweathermap.org/users/sign_up
    
    - Important!! Set Partition Scheme.
 
-   ***Tools → Partition Scheme: Large APP (4MB).****
+!!!!Tools → Partition Scheme: Large APP (4MB).!!!!
    
 4. **(KC868-A6) PCF8574 Library**  
    Download Kincony PCF8574 Library .zip: <https://www.kincony.com/forum/attachment.php?aid=1697>  
