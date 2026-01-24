@@ -37,9 +37,9 @@ extern "C" {
 // ---------- Hardware ----------
 static const uint8_t MAX_ZONES = 16;
 
-constexpr uint8_t I2C_SDA = 4;
-constexpr uint8_t I2C_SCL = 15;
-
+constexpr uint8_t I2C_SDA = 4;   //8 for s3
+constexpr uint8_t I2C_SCL = 15;  //9 for s3
+ 
 #ifndef STATUS_PIXEL_PIN
 #define STATUS_PIXEL_PIN 48   // WS2812 status LED
 #endif
@@ -66,7 +66,7 @@ const uint8_t ALL_P = 6;
 const uint8_t PCH[ALL_P] = { P0, P1, P2, P3, P4, P5 };
 uint8_t mainsChannel = P4; // 4-zone mode
 uint8_t tankChannel  = P5; // 4-zone mode
-uint8_t zonesCount   = 4;  // 1..16 (4 enables tank/mains behaviour)
+uint8_t zonesCount   = 4;  // 1..16 
 
 // GPIO fallback (configurable polarity)
 bool useGpioFallback = false;
@@ -429,6 +429,13 @@ String sourceModeText() {
   return isTankLow() ? "Auto:Mains" : "Auto:Tank";
 }
 
+static float chipTemperatureC() {
+  // Arduino core provides temperatureRead() for ESP32 family; clamp obvious bad readings
+  float t = temperatureRead();
+  if (isnan(t) || t < -40.0f || t > 150.0f) return NAN;
+  return t;
+}
+
 static inline void chooseWaterSource(const char*& src, bool& mainsOn, bool& tankOn) {
   mainsOn = false; tankOn = false;
   if (zonesCount != 4) { src = "NoTank"; return; }  // non-4-zone modes: no mains/tank relays
@@ -447,6 +454,17 @@ void statusPixelSet(uint8_t r,uint8_t g,uint8_t b) {
 
 void updateStatusPixel() {
   if (!statusPixelReady) return;
+
+  // Flash blue when in AP/config-portal mode to signal setup state.
+  bool inApMode = (WiFi.getMode() == WIFI_MODE_AP || WiFi.getMode() == WIFI_MODE_APSTA || wifiManager.getConfigPortalActive());
+  if (inApMode) {
+    static uint32_t lastBlink = 0;
+    static bool on = false;
+    uint32_t now = millis();
+    if (now - lastBlink >= 400) { on = !on; lastBlink = now; }
+    if (on) statusPixelSet(0, 0, 32); else statusPixelSet(0, 0, 0);
+    return;
+  }
 
   // Default: OK (green)
   uint8_t r = 0, g = 20, b = 0;
@@ -783,6 +801,9 @@ void setup() {
     doc["tankPct"]         = tankPercent();
     doc["sourceMode"]      = sourceModeText();
     doc["rssi"]            = WiFi.RSSI();
+    float chipTempC        = chipTemperatureC();
+    doc["chipTempC"]       = isnan(chipTempC) ? 0.0f : chipTempC;
+    doc["chipTempValid"]   = !isnan(chipTempC);
     doc["uptimeSec"]       = (millis() - bootMillis) / 1000;
 
     // Current rain (actuals)
@@ -2043,11 +2064,12 @@ void handleRoot() {
   DeserializationError werr = deserializeJson(js, cachedWeatherData);
 
   // Safe reads
-  float temp = NAN, hum = NAN, ws = NAN;
+  float temp = NAN, hum = NAN, ws = NAN, feels = NAN;
   if (!werr) {
-    if (js["main"]["temp"].is<float>())     temp = js["main"]["temp"].as<float>();
-    if (js["main"]["humidity"].is<float>()) hum  = js["main"]["humidity"].as<float>();
-    if (js["wind"]["speed"].is<float>())    ws   = js["wind"]["speed"].as<float>();
+    if (js["main"]["temp"].is<float>())        temp  = js["main"]["temp"].as<float>();
+    if (js["main"]["feels_like"].is<float>())  feels = js["main"]["feels_like"].as<float>();
+    if (js["main"]["humidity"].is<float>())    hum   = js["main"]["humidity"].as<float>();
+    if (js["wind"]["speed"].is<float>())       ws    = js["wind"]["speed"].as<float>();
   }
 
   String cond = werr ? "-" : String(js["weather"][0]["main"].as<const char*>());
@@ -2224,9 +2246,10 @@ html += F("</b></a></div>");
 
   html += F("<div class='card'><h3>Current Weather</h3>");
   html += F("<div class='grid' style='grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:8px'>");
-  html += F("<div class='chip'>Temp "); html += (isnan(temp) ? String("--") : String(temp,1)+" C"); html += F("</div>");
-  html += F("<div class='chip'>Humidity ");  html += (isnan(hum)  ? String("--") : String((int)hum)+" %"); html += F("</div>");
-  html += F("<div class='chip'>Wind "); html += (isnan(ws)   ? String("--") : String(ws,1)+" m/s"); html += F("</div>");
+  html += F("<div class='chip'>Temp <span id='tempChip'>"); html += (isnan(temp) ? String("--") : String(temp,1)+" C"); html += F("</span></div>");
+  html += F("<div class='chip'>Feels <span id='feelsChip'>"); html += (isnan(feels) ? String("--") : String(feels,1)+" C"); html += F("</span></div>");
+  html += F("<div class='chip'>Humidity <span id='humChip'>");  html += (isnan(hum)  ? String("--") : String((int)hum)+" %"); html += F("</span></div>");
+  html += F("<div class='chip'>Wind <span id='windChip'>"); html += (isnan(ws)   ? String("--") : String(ws,1)+" m/s"); html += F("</span></div>");
   html += F("<div class='chip'>Condition <b id='cond'>");
   html += cond.length() ? cond : String("--");
   html += F("</b></div></div></div>");
@@ -2562,6 +2585,10 @@ html += F("</b></a></div>");
   html += F("if(sunr) sunr.textContent = st.sunriseLocal || '--:--';");
   html += F("if(suns) suns.textContent = st.sunsetLocal  || '--:--';");
   html += F("if(press){ const p=st.pressure; press.textContent=(typeof p==='number' && p>0)?p.toFixed(0):'--'; }");
+  html += F("const tempEl=document.getElementById('tempChip'); if(tempEl){ const v=st.temp; tempEl.textContent=(typeof v==='number')?v.toFixed(1)+' C':'--'; }");
+  html += F("const feelsEl=document.getElementById('feelsChip'); if(feelsEl){ const v=st.feels_like; feelsEl.textContent=(typeof v==='number')?v.toFixed(1)+' C':'--'; }");
+  html += F("const humEl=document.getElementById('humChip'); if(humEl){ const v=st.humidity; humEl.textContent=(typeof v==='number')?Math.round(v)+' %':'--'; }");
+  html += F("const windEl=document.getElementById('windChip'); if(windEl){ const v=st.wind; windEl.textContent=(typeof v==='number')?v.toFixed(1)+' m/s':'--'; }");
 
   // keep master pill synced
   html += F("const bm=document.getElementById('btn-master'); const ms=document.getElementById('master-state');");
@@ -3450,6 +3477,14 @@ void handleConfigure() {
     // NEW: snapshot current values before applying POST changes
   String oldApiKey = apiKey;
   String oldCity   = city;
+  int oldZonePins[MAX_ZONES]; for (int i=0;i<MAX_ZONES;i++) oldZonePins[i] = zonePins[i];
+  int oldMainsPin        = mainsPin;
+  int oldTankPin         = tankPin;
+  int oldTankLevelPin    = tankLevelPin;
+  int oldManualSelectPin = manualSelectPin;
+  int oldManualStartPin  = manualStartPin;
+  int oldRainSensorPin   = rainSensorPin;
+  bool pinsChanged       = false;
 
   // Weather
   if (server.hasArg("apiKey")) apiKey = server.arg("apiKey");
@@ -3580,6 +3615,15 @@ void handleConfigure() {
     if ((p >= -1 && p <= 39)) manualStartPin = p;
   }
 
+  // Detect pin changes (needs to be done after all pin assignments above)
+  for (int i=0;i<MAX_ZONES;i++) if (zonePins[i] != oldZonePins[i]) pinsChanged = true;
+  if (mainsPin        != oldMainsPin)        pinsChanged = true;
+  if (tankPin         != oldTankPin)         pinsChanged = true;
+  if (tankLevelPin    != oldTankLevelPin)    pinsChanged = true;
+  if (manualSelectPin != oldManualSelectPin) pinsChanged = true;
+  if (manualStartPin  != oldManualStartPin)  pinsChanged = true;
+  if (rainSensorPin   != oldRainSensorPin)   pinsChanged = true;
+
   // NEW: polarity setting
   gpioActiveLow = server.hasArg("gpioActiveLow"); 
 
@@ -3647,6 +3691,12 @@ void handleConfigure() {
 
   server.sendHeader("Location", "/setup", true);
   server.send(302, "text/plain", "");
+
+  if (pinsChanged) {
+    Serial.println("[CFG] Pin mapping changed, restarting to apply GPIO setup...");
+    delay(200);
+    ESP.restart();
+  }
 }
 
 void handleClearEvents() {
