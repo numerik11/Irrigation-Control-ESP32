@@ -127,9 +127,9 @@ WiFiClient client;
 // PCF mapping
 const uint8_t ALL_P = 6;
 const uint8_t PCH[ALL_P] = { P0, P1, P2, P3, P4, P5 };
-uint8_t mainsChannel = P4; // 4-zone mode
-uint8_t tankChannel  = P5; // 4-zone mode
-uint8_t zonesCount   = 4;  // 1..MAX_ZONES (4 enables tank/mains mode)
+uint8_t mainsChannel = P4; // reserved for mains relay
+uint8_t tankChannel  = P5; // reserved for tank relay
+uint8_t zonesCount   = 4;  // 1..MAX_ZONES
 
 // GPIO fallback (configurable polarity)
 bool useGpioFallback = false;
@@ -138,7 +138,7 @@ bool relayActiveHigh = true;
 bool tankEnabled     = true;
 
 int zonePins[MAX_ZONES] = {
-  18, 19, 12, 14, 25, 26,  // defaults for 6 channels
+  18, 19, 12, 14, -1, -1,  // defaults: first 4 use PCF, keep P4/P5 free for mains/tank
   -1, -1, -1, -1, -1, -1, -1, -1, -1, -1   // spare slots up to 16
 };
 int mainsPin = 25;
@@ -640,7 +640,7 @@ inline void gpioSourceWrite(bool mainsOn, bool tankOn) {
 
 inline void setWaterSourceRelays(bool mainsOn, bool tankOn) {
   // Prefer PCF outputs for the classic wiring; otherwise drive the configured GPIO pins.
-  if (!useGpioFallback && zonesCount <= 4) {
+  if (!useGpioFallback) {
     // PCF8574: active-LOW
     pcfOut.digitalWrite(mainsChannel, mainsOn ? LOW : HIGH);
     pcfOut.digitalWrite(tankChannel,  tankOn  ? LOW : HIGH);
@@ -650,7 +650,9 @@ inline void setWaterSourceRelays(bool mainsOn, bool tankOn) {
 }
 
 inline bool useExpanderForZone(int z) {
-  return (!useGpioFallback && z >= 0 && z < (int)ALL_P);
+  if (useGpioFallback) return false;
+  // Reserve PCF channels P4/P5 for mains/tank; only zones 0-3 use the expander
+  return (z >= 0 && z < 4);
 }
 
 // Duration helper: slot=1 (primary) or 2 (secondary) with fallback to primary
