@@ -37,8 +37,8 @@ extern "C" {
 // ---------- Hardware ----------
 static const uint8_t MAX_ZONES = 16;
 
-constexpr uint8_t I2C_SDA = 8;   //8 for s3
-constexpr uint8_t I2C_SCL = 9;  //9 for s3
+constexpr uint8_t I2C_SDA = 4;   //8 for s3
+constexpr uint8_t I2C_SCL = 15;  //9 for s3
  
 #ifndef STATUS_PIXEL_PIN
 #define STATUS_PIXEL_PIN 48   // WS2812 status LED
