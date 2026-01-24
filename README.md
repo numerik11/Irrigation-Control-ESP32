@@ -18,7 +18,7 @@ Free OpenWeatherMap API key → https://home.openweathermap.org/users/sign_up
 
 ---
 
-## Highlights
+## Features
 
 - **Dashboard**
   - Tank level (%) with `Auto:Mains` / `Auto:Tank` / `Force` state
@@ -28,11 +28,11 @@ Free OpenWeatherMap API key → https://home.openweathermap.org/users/sign_up
   - Zone cards with progress and manual On/Off
 
 - **Zones & Schedules**
-  - 4-zone mode (Zones 1–4) **+** Mains/Tank master valves on relays 5 & 6  
-  - 6-zone mode (six zones)
+  - 4-zone mode (Zones 1–4) **+** Mains/Tank master valves on relays 5 & 6 (For KC868-A6)  
+  - 1-16 zone mode (If using GPIO and Relay module, A6 Can be used for 6 zone)
   - Two start times per zone (optional Start 2), per-day enable, minute precision
   - Per-zone duration (minutes + seconds)
-  - Overlapping starts will run one at a time or together choose in setup
+  - Overlapping starts will run one at a time or together choose in setup (running together be sure you have sufficent power-supply for multiple solenoid coils). 
   - Editable zone names stored in esp32
 
 - **Delays & Sensors**
