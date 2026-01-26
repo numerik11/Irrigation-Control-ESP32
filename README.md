@@ -188,6 +188,7 @@ Free OpenWeatherMap API key → https://home.openweathermap.org/users/sign_up
 -Wemos R32 w/ 6 Relay module 24vac
 
 ![PXL_20251222_121735203~2](https://github.com/user-attachments/assets/d0dc6ca8-cdca-4920-9006-1908e681a619)
-<img width="349" height="264" alt="image" src="https://github.com/user-attachments/assets/598fff99-facd-4d5b-8774-f32910c765bd" />
+<img width="352" height="263" alt="image" src="https://github.com/user-attachments/assets/bb551a41-240f-40d2-8032-ef9c449602fb" />
+
 
 
