@@ -28,9 +28,8 @@ Free OpenWeatherMap API key → https://home.openweathermap.org/users/sign_up
   - Zone cards with progress and manual On/Off
 
 - **Zones & Schedules**
-  - 4-zone mode (Zones 1–4) **+** Mains/Tank master valves on relays 5 & 6 (For KC868-A6)  
-  - 1-16 zone mode (If using GPIO and Relay module, A6 Can be used for 6 zone)
-  - Two start times per zone (optional Start 2), per-day enable, minute precision
+  - 1-16 zones (If using GPIO and Relay module, A6 Can be used for 6 zone or 4 with 2 relays for tank/main control)
+  - Two start times per zone (optional Start 2 w/ seperate duration), per-day enable, minute precision
   - Per-zone duration (minutes + seconds)
   - Overlapping starts will run one at a time or together choose in setup (running together be sure you have sufficent power-supply for multiple solenoid coils). 
   - Editable zone names stored in esp32
@@ -51,6 +50,11 @@ Free OpenWeatherMap API key → https://home.openweathermap.org/users/sign_up
   - WiFiManager captive portal: `ESPIrrigationAP` (first boot/failure)
   - mDNS: `http://espirrigation.local/`
   - Event logger to CSV (weather snapshot per event, downloadable)
+ 
+-  **Behaviour (Scheduling & Delays)
+  - If programed to run while **rain**, **pause**, **master off**, or **rain cooldown** watering will be **CANCELLED** (and logged)  
+  - Manual “On” commands also respect the same rules and cancel when blocked  
+  - Wind delay, when enabled, scheduled watering is automatically postponed until wind speed falls below the configured threshold,         then starts automaticly. 
 
 ---
 
@@ -119,15 +123,6 @@ Free OpenWeatherMap API key → https://home.openweathermap.org/users/sign_up
    Goto - **Setup**: enter OpenWeather API Key + City ID, set timezone, use zones (4 or 6), wind enable?/rain enable?, GPIO pins.
    Goto - **Home**: set days, start times, durations per zone.
 
----
-
-## Behaviour (Scheduling & Delays)
-
-- Starts during **rain**, **pause**, **master off**, or **rain cooldown** → **CANCELLED** (logged)  
-- Manual “On” commands also respect the same rules and cancel when blocked  
-- “Next Water” still reflects the next eligible schedule (no queueing)
-- Wind delay, when enabled, scheduled watering is automatically postponed until wind speed falls below the configured threshold, then starts automaticly.
-  
 ---
 
 ## Useful Endpoints
