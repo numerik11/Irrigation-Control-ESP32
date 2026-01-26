@@ -46,7 +46,7 @@ Free OpenWeatherMap API key → https://home.openweathermap.org/users/sign_up
   - Automatic I²C check for KC868-A* board if not found set GPIO for generic ESP32 board in settings. (s3 Recommended).
   - All zone/mains/tank, high/low and pins configurable in Setup (Reboot after chaging pins)
   - OLED or TFT status screens (Home / Rain Delay) (Optional)
-  - Photoresistor and 100k resistor for BL control (off) if in enclosure and door is closed.
+  - Photoresistor and 100k resistor for SPI TFT BL control (off) if in enclosure and door is closed.
   - 1-16 Relay Module 
 
 - **Networking & UX**
