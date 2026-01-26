@@ -1,4 +1,4 @@
-//130x230 SPI TFT / ESP32 
+//SPI TFT / ESP32-S3 Reccomended.
 
 #ifndef ENABLE_DEBUG_ROUTES
   #define ENABLE_DEBUG_ROUTES 0   // set to 1 when you need them
@@ -57,20 +57,27 @@ bool tempSensorReady = false;
 // ---------- ST7789 (1.9") TFT ----------
 // Most 1.9" ST7789 modules are 170x320.
 // If yours is 240x320, change TFT_W/TFT_H accordingly.
-static constexpr int16_t TFT_W = 170;
+static constexpr int16_t TFT_W = 240;
 static constexpr int16_t TFT_H = 320;
 
 // Choose pins that do NOT clash with your I2C (4/15) or other IO.
-// Example defaults (change to your wiring):
-#define TFT_SCLK  20  // SCL
-#define TFT_MOSI  23  // SDA
-#define TFT_CS    3   // CS 
-#define TFT_DC    13  // DC
-#define TFT_RST   19  // RST
-#define TFT_BL    32  // or -1 if tied to 3V3
+// Defaults (editable from Setup -> SPI (TFT)):
+static const int TFT_SCLK_DEFAULT = 41;  // SCL
+static const int TFT_MOSI_DEFAULT = 42;  // SDA
+static const int TFT_CS_DEFAULT   = 1;   // CS
+static const int TFT_DC_DEFAULT   = 2;   // DC
+static const int TFT_RST_DEFAULT  = 21;  // RST (-1 allowed)
+static const int TFT_BL_DEFAULT   = -1;  // or -1 if tied to 3V3
+
+static int tftSclkPin = TFT_SCLK_DEFAULT;
+static int tftMosiPin = TFT_MOSI_DEFAULT;
+static int tftCsPin   = TFT_CS_DEFAULT;
+static int tftDcPin   = TFT_DC_DEFAULT;
+static int tftRstPin  = TFT_RST_DEFAULT;
+static int tftBlPin   = TFT_BL_DEFAULT;
 
 SPIClass TFTSPI(SPI);
-Adafruit_ST7789 tft(&TFTSPI, TFT_CS, TFT_DC, TFT_RST);
+Adafruit_ST7789 tft(&TFTSPI, -1, -1, -1);
 
 // ===================== UI helpers + palette (MUST be before RainScreen/HomeScreen) =====================
 static inline uint16_t RGB(uint8_t r, uint8_t g, uint8_t b){
@@ -212,6 +219,12 @@ bool     rainActive             = false;
 bool     rainByWeatherActive    = false;
 bool     rainBySensorActive     = false;
 uint8_t  rainCooldownHours      = 24;      // or loaded from config
+
+// Photoresistor (auto backlight)
+bool photoAutoEnabled = false;
+bool photoInvert = false;
+int  photoPin = -1;
+int  photoThreshold = 1500; // ADC raw (0-4095)
 
 
 // legacy (kept for file compat; not used in logic)
@@ -674,6 +687,15 @@ inline bool isValidAdcPin(int pin) {
   return (pin >= 1 && pin <= 20);
 }
 
+inline bool isValidGpioPin(int pin) {
+  return (pin >= 0 && pin <= 48);
+}
+
+inline bool isUnsafeTftPin(int pin) {
+  return (pin == 0 || pin == 19 || pin == 20 || pin == 45 || pin == 46 ||
+          (pin >= 9 && pin <= 14) || (pin >= 35 && pin <= 38));
+}
+
 void statusPixelSet(uint8_t r,uint8_t g,uint8_t b) {
   if (!statusPixelReady) return;
   statusPixel.setPixelColor(0, statusPixel.Color(r,g,b));
@@ -731,39 +753,95 @@ bool initExpanders() {
 
 static bool g_tftInvert = false;
 static bool g_tftBlOn   = true;
+static bool g_tftDisplayOn = true;
 static bool g_tftPwmReady = false;
 static uint8_t g_tftBrightness = 125; // 0-255 duty when ON
 static const int TFT_PWM_CH = 7;      // LEDC channel for TFT BL
 static bool g_forceHomeReset = false; // force full HomeScreen repaint
 
+static inline void tftDisplay(bool on){
+  if (g_tftDisplayOn == on) return;
+  tft.enableDisplay(on);
+  tft.enableSleep(!on);
+  g_tftDisplayOn = on;
+}
+
 static inline void tftBacklight(bool on){
-  if (TFT_BL >= 0) {
+  if (tftBlPin >= 0) {
     if (g_tftPwmReady) {
       ledcWrite(TFT_PWM_CH, on ? g_tftBrightness : 0);
     } else {
-      pinMode(TFT_BL, OUTPUT);
-      digitalWrite(TFT_BL, on ? HIGH : LOW);   // most modules: HIGH = on
+      pinMode(tftBlPin, OUTPUT);
+      digitalWrite(tftBlPin, on ? HIGH : LOW);   // most modules: HIGH = on
     }
     g_tftBlOn = on;
   }
+  tftDisplay(on);
 }
 
 static void tftSetBrightness(uint8_t pct){ // pct: 0-100
   if (pct > 100) pct = 100;
   uint8_t duty = map(pct, 0, 100, 0, 255);
   g_tftBrightness = duty;
-  if (TFT_BL >= 0) {
+  if (tftBlPin >= 0) {
     if (g_tftPwmReady) {
       ledcWrite(TFT_PWM_CH, g_tftBlOn ? duty : 0);
     } else {
       // if no PWM, fall back to on/off at threshold
-      digitalWrite(TFT_BL, (pct > 0) ? HIGH : LOW);
+      digitalWrite(tftBlPin, (pct > 0) ? HIGH : LOW);
     }
   }
 }
+
+static void tickAutoBacklight(){
+  if (!photoAutoEnabled) return;
+  if (!isValidAdcPin(photoPin)) return;
+
+  static uint32_t lastMs = 0;
+  uint32_t nowMs = millis();
+  if (nowMs - lastMs < 1000) return;
+  lastMs = nowMs;
+
+  const int N = 4;
+  uint32_t acc = 0;
+  for (int i = 0; i < N; i++) { acc += analogRead(photoPin); delayMicroseconds(200); }
+  int raw = (int)(acc / N);
+
+  const int hysteresis = 50;
+  int low = photoThreshold - hysteresis;
+  int high = photoThreshold + hysteresis;
+  if (low < 0) low = 0;
+  if (high > 4095) high = 4095;
+
+  static bool autoOn = true;
+  static uint32_t darkSinceMs = 0;
+  const uint32_t DARK_HOLD_MS = 2000; // keep screen on for 10s after it goes dark
+
+  if (!photoInvert) {
+    if (raw < low) {
+      if (darkSinceMs == 0) darkSinceMs = nowMs;
+      if ((nowMs - darkSinceMs) >= DARK_HOLD_MS) autoOn = false;
+    } else {
+      darkSinceMs = 0;
+      if (raw > high) autoOn = true;
+    }
+  } else {
+    if (raw > high) {
+      if (darkSinceMs == 0) darkSinceMs = nowMs;
+      if ((nowMs - darkSinceMs) >= DARK_HOLD_MS) autoOn = false;
+    } else {
+      darkSinceMs = 0;
+      if (raw < low) autoOn = true;
+    }
+  }
+
+  bool curOn = (tftBlPin >= 0) ? g_tftBlOn : g_tftDisplayOn;
+  if (autoOn != curOn) {
+    tftBacklight(autoOn);
+  }
+}
 static void tftBegin(){
-  // If you need custom pins, uncomment this and set TFT_SCK/TFT_MOSI:
-  // SPI.begin(TFT_SCK, TFT_MISO, TFT_MOSI, TFT_CS);
+  // Pins are loaded from config (Setup -> SPI (TFT)).
 
   tft.init(TFT_W, TFT_H);
   tft.setTextWrap(false);
@@ -847,7 +925,8 @@ void setup() {
   initTempSensor(); // try to bring up the internal temp sensor (ESP32-S3)
 
   // ---------- ST7789 init ----------
-TFTSPI.begin(TFT_SCLK, -1, TFT_MOSI, TFT_CS);
+  new (&tft) Adafruit_ST7789(&TFTSPI, tftCsPin, tftDcPin, tftRstPin);
+  TFTSPI.begin(tftSclkPin, -1, tftMosiPin, tftCsPin);
 
   tft.init(TFT_W, TFT_H);
   tft.setRotation(3);                 // try 0/1/2/3 if orientation is wrong
@@ -896,20 +975,35 @@ TFTSPI.begin(TFT_SCLK, -1, TFT_MOSI, TFT_CS);
   WiFi.enableLongRange(true);          // trade speed for sensitivity
 
   tft.fillScreen(ST77XX_BLACK);
-  tft.setTextColor(ST77XX_GREEN);
-  tft.setTextSize(3);
-  tft.setCursor(10, 20);
-  tft.print("Connected!");
 
-  tft.setTextColor(ST77XX_WHITE);
+  // Connected screen (cleaner layout)
+  tft.setTextColor(C_ACCENT);
+  tft.setTextSize(3);
+  tft.setCursor(10, 16);
+  tft.print("Connected");
+
+  tft.setTextColor(C_TEXT);
   tft.setTextSize(2);
+  tft.setCursor(10, 58);
+  tft.print("IP:");
   tft.setCursor(10, 80);
   tft.print(WiFi.localIP().toString());
 
-  tft.setCursor(10, 115);
+  tft.setTextColor(C_MUTED);
+  tft.setCursor(10, 112);
+  tft.print("mDNS:");
+  tft.setTextColor(C_TEXT);
+  tft.setCursor(10, 134);
   tft.print("espirrigation.local");
 
-  delay(2500);
+  tft.setTextSize(1);
+  tft.setTextColor(C_MUTED);
+  tft.setCursor(10, 160);
+  tft.print("RSSI ");
+  tft.print(WiFi.RSSI());
+  tft.print(" dBm");
+
+  delay(4000);
 
   // Timezone + SNTP
   delay(250);
@@ -1125,8 +1219,8 @@ TFTSPI.begin(TFT_SCLK, -1, TFT_MOSI, TFT_CS);
   });
   server.on("/toggleBacklight", HTTP_POST, [](){
     HttpScope _scope;
-    static bool inverted=false; inverted=!inverted;
-    server.send(200,"text/plain","Backlight toggled");
+    toggleBacklight();
+    server.send(200,"text/plain","Display toggled");
   });
 
   // I2C tools
@@ -1155,7 +1249,7 @@ TFTSPI.begin(TFT_SCLK, -1, TFT_MOSI, TFT_CS);
   });
   server.on("/tft_brightness", HTTP_POST, [](){
     HttpScope _scope;
-    if (TFT_BL < 0) { server.send(500,"text/plain","No backlight pin"); return; }
+    if (tftBlPin < 0) { server.send(500,"text/plain","No backlight pin"); return; }
     int lvl = server.hasArg("level") ? server.arg("level").toInt() : 100;
     if (lvl < 0) lvl = 0; if (lvl > 100) lvl = 100;
     tftSetBrightness((uint8_t)lvl);
@@ -1230,6 +1324,7 @@ void loop() {
   mqttPublishStatus(); 
   tickWeather(); // Timed weather fetch after servicing HTTP to avoid blocking the UI
   tickManualButtons();
+  tickAutoBacklight();
 
   // Track transitions to clear/refresh screens
   static bool lastWasDelayScreen = false;
@@ -1903,10 +1998,9 @@ void logEvent(int zone, const char* eventType, const char* source, bool rainDela
 
 // ---------- OLED UI ----------
 void toggleBacklight(){
-  if (TFT_BL < 0) return;
   static bool on = true;
   on = !on;
-  digitalWrite(TFT_BL, on ? HIGH : LOW);
+  tftBacklight(on);
 }
 
 void updateLCDForZone(int zone) {
@@ -2127,6 +2221,7 @@ void HomeScreen() {
 
   float temp = js["main"]["temp"] | NAN;
   int   hum  = js["main"]["humidity"] | -1;
+  float windNow = js["wind"]["speed"] | NAN;
   int   pct  = tankPercent();
 
   time_t now = time(nullptr);
@@ -2145,10 +2240,11 @@ void HomeScreen() {
   const int gap = 6;
   const int topY = 44;
 
-  // Header: big date + RSSI (no HOME/READY pill)
+  // Header: big date + status pill + RSSI
   static char lastTopDate[16] = "";
   static int  lastTopRssi = 9999;
   static int  lastTopMinute = -1;
+  static int  lastTopStatus = -1;
   static uint32_t lastTopDrawMs = 0;
   char topDate[16] = "--/--/----";
   if (tmv) snprintf(topDate, sizeof(topDate), "%02d/%02d/%04d", tmv->tm_mday, tmv->tm_mon + 1, tmv->tm_year + 1900);
@@ -2159,24 +2255,64 @@ void HomeScreen() {
   bool minuteChanged = (tmv && curMinute != lastTopMinute);
   bool dateChanged   = (strcmp(topDate, lastTopDate) != 0);
   bool rssiChanged   = (abs(topRssi - lastTopRssi) >= 2) && (nowMs - lastTopDrawMs >= 15000U);
+  int statusId = !systemMasterEnabled ? 3 : (isPausedNow() ? 2 : ((rainActive || windActive) ? 1 : 0));
+  bool statusChanged = (statusId != lastTopStatus);
 
-  if (dateChanged || minuteChanged || rssiChanged) {
+  if (g_forceHomeReset) {
+    lastTopDate[0] = '\0';
+    lastTopRssi = 9999;
+    lastTopMinute = -1;
+    lastTopStatus = -1;
+    lastTopDrawMs = 0;
+  }
+
+  if (dateChanged || minuteChanged || rssiChanged || statusChanged) {
     tft.fillRect(0, 0, W, topY - 8, C_BG);
+
+    // Date (left)
     tft.setTextSize(3);
     tft.setTextColor(C_ACCENT);
     tft.setCursor(6, 6);
     tft.print(topDate);
-    tft.setTextSize(2);
-    tft.setTextColor(C_MUTED);
+
+    // Status pill (right)
+    const char* statusText = "READY";
+    uint16_t statusColor = C_GOOD;
+    if (!systemMasterEnabled) { statusText = "MASTER OFF"; statusColor = C_BAD; }
+    else if (isPausedNow())   { statusText = "PAUSED";     statusColor = C_WARN; }
+    else if (rainActive || windActive) { statusText = "DELAY"; statusColor = C_WARN; }
+
+    tft.setTextSize(1);
+    int16_t pbx, pby; uint16_t pbw, pbh;
+    tft.getTextBounds(statusText, 0, 0, &pbx, &pby, &pbw, &pbh);
+    int pillW = (int)pbw + 10;
+    int pillH = (int)pbh + 6;
+    int pillX = W - pillW - 6;
+    int pillY = 8;
+    tft.fillRoundRect(pillX, pillY, pillW, pillH, 4, statusColor);
+    tft.drawRoundRect(pillX, pillY, pillW, pillH, 4, C_EDGE);
+    tft.setTextColor(ST77XX_BLACK);
+    tft.setCursor(pillX + 5, pillY + 3);
+    tft.print(statusText);
+
+    // RSSI (small, left of pill if space)
+    tft.setTextSize(1);
+    uint16_t rssiColor = (topRssi > -60) ? C_GOOD : (topRssi > -75 ? C_WARN : C_BAD);
+    tft.setTextColor(rssiColor);
     char rssiTxt[16]; snprintf(rssiTxt, sizeof(rssiTxt), "%ddBm", topRssi);
-    int16_t bx, by; uint16_t bw, bh;
-    tft.getTextBounds(rssiTxt, 0, 0, &bx, &by, &bw, &bh);
-    tft.setCursor(W - (int)bw - 6, 12);
-    tft.print(rssiTxt);
+    int16_t rbx, rby; uint16_t rbw, rbh;
+    tft.getTextBounds(rssiTxt, 0, 0, &rbx, &rby, &rbw, &rbh);
+    int rssiX = pillX - (int)rbw - 6;
+    if (rssiX > 6) {
+      tft.setCursor(rssiX, 12);
+      tft.print(rssiTxt);
+    }
+
     strncpy(lastTopDate, topDate, sizeof(lastTopDate));
     lastTopDate[sizeof(lastTopDate) - 1] = '\0';
     lastTopRssi = topRssi;
     lastTopMinute = curMinute;
+    lastTopStatus = statusId;
     lastTopDrawMs = nowMs;
   }
 
@@ -2190,14 +2326,33 @@ void HomeScreen() {
     static char lastTime[6] = "";
     static char lastDate[20] = "";
     static int lastTemp = -1000;
+    static float lastTempF = NAN;
+    static char lastTempArrow = '-';
+    static int lastMinT = 1000;
+    static int lastMaxT = 1000;
+    static int lastGustT = 1000;
     static int lastHum = -2;
     static int lastPct = -1;
+    static char lastNextZone[12] = "";
+    static char lastNextEta[12] = "";
+    static char lastNextRem[16] = "";
+    static bool lastDelayLine = false;
+    static bool lastMasterLine = false;
+    static String lastCauseLine;
+    static String lastZoneNameShort;
+    static int lastWindTenths = 10000;
+    static int lastRainTenths = 10000;
     static bool lastZoneState[MAX_ZONES] = {false};
     static uint32_t lastZoneRem[MAX_ZONES] = {0};
     if (g_forceHomeReset) {
       init = false; lastDelayed = false; lastW = lastH = -1; lastZonesCount = -1;
       lastTime[0] = lastDate[0] = '\0';
       lastTemp = -1000; lastHum = -2; lastPct = -1;
+      lastTempF = NAN; lastTempArrow = '-';
+      lastMinT = 1000; lastMaxT = 1000; lastGustT = 1000;
+      lastNextZone[0] = lastNextEta[0] = lastNextRem[0] = '\0';
+      lastDelayLine = false; lastMasterLine = false; lastCauseLine = ""; lastZoneNameShort = "";
+      lastWindTenths = 10000; lastRainTenths = 10000;
       for (int i=0;i<MAX_ZONES;i++){ lastZoneState[i]=false; lastZoneRem[i]=0; }
       g_forceHomeReset = false;
     }
@@ -2211,6 +2366,7 @@ void HomeScreen() {
     const int rightW = W - 2 * pad - colGap - leftW;
     const int leftX = pad;
     const int rightX = leftX + leftW + colGap;
+    const int statsH = 46; // slightly taller to fit tank bar
 
     const bool layoutChanged = (!init || lastW != W || lastH != H || lastZonesCount != (int)zonesCount);
     const bool stateChanged = (delayed != lastDelayed);
@@ -2229,7 +2385,6 @@ void HomeScreen() {
       drawCard(leftX, contentY, leftW, contentH, C_PANEL, C_EDGE);
 
       // Right: weather/tank card
-      const int statsH = 40;
       drawCard(rightX, contentY, rightW, statsH, C_PANEL, C_EDGE);
 
       // Right: zones grid
@@ -2280,39 +2435,164 @@ void HomeScreen() {
       }
     }
 
-    const int nextY = contentY + 44; // push down away from clock
-    const int nextH = 52;
-    tft.fillRect(leftX + 4, nextY, leftW - 8, nextH, C_PANEL);
-    tft.setTextSize(2);
-    tft.setTextColor(C_TEXT);
-    tft.setCursor(leftX + 8, nextY + 2);
-    tft.print("Next ");
-    tft.print(zoneBuf);
-    tft.setCursor(leftX + 8, nextY + 20);
-    tft.print(etaBuf);
-    tft.setTextSize(1);
-    tft.setTextColor(C_MUTED);
-    tft.setCursor(leftX + 8, nextY + 38);
-    tft.print(remBuf);
+    const int nextY = contentY + 40; // push down away from clock
+    const int nextH = 44;
+    bool nextChanged =
+      layoutChanged ||
+      (strcmp(zoneBuf, lastNextZone) != 0) ||
+      (strcmp(etaBuf, lastNextEta) != 0) ||
+      (strcmp(remBuf, lastNextRem) != 0);
+    if (nextChanged) {
+      tft.fillRect(leftX + 4, nextY, leftW - 8, nextH, C_PANEL);
+      tft.drawRect(leftX + 4, nextY, leftW - 8, nextH, C_EDGE);
+      tft.setTextSize(1);
+      tft.setTextColor(C_TEXT);
+      tft.setCursor(leftX + 8, nextY + 2);
+      tft.print("Next ");
+      tft.print(zoneBuf);
+      tft.setCursor(leftX + 8, nextY + 16);
+      tft.print(etaBuf);
+      tft.setTextSize(1);
+      tft.setTextColor(C_MUTED);
+      tft.setCursor(leftX + 8, nextY + 30);
+      tft.print(remBuf);
+      strncpy(lastNextZone, zoneBuf, sizeof(lastNextZone));
+      lastNextZone[sizeof(lastNextZone) - 1] = '\0';
+      strncpy(lastNextEta, etaBuf, sizeof(lastNextEta));
+      lastNextEta[sizeof(lastNextEta) - 1] = '\0';
+      strncpy(lastNextRem, remBuf, sizeof(lastNextRem));
+      lastNextRem[sizeof(lastNextRem) - 1] = '\0';
+    }
+
+    const bool showExtra = (contentH >= 112);
+    int infoY = nextY + nextH + 2;
+    if (showExtra) {
+      String zn = (nw.zone >= 0) ? zoneNames[nw.zone] : "None";
+      if (zn.length() > 12) zn = zn.substring(0, 12);
+      int windT = isfinite(windNow) ? (int)lroundf(windNow * 10.0f) : 10000;
+      int rainT = (int)lroundf(rain1hNow * 10.0f);
+      bool extraChanged = layoutChanged ||
+                          (zn != lastZoneNameShort) ||
+                          (windT != lastWindTenths) ||
+                          (rainT != lastRainTenths);
+      if (extraChanged) {
+        tft.fillRect(leftX + 4, infoY, leftW - 8, 22, C_PANEL);
+        tft.setTextSize(1);
+        tft.setTextColor(C_MUTED);
+        tft.setCursor(leftX + 8, infoY + 2);
+        tft.print("Zone ");
+        tft.setTextColor(C_ACCENT);
+        tft.print(zn);
+
+        tft.setTextColor(C_MUTED);
+        tft.setCursor(leftX + 8, infoY + 12);
+        if (isfinite(windNow)) {
+          tft.print("W ");
+          tft.setTextColor(C_WARN);
+          tft.print(windNow, 1);
+          tft.setTextColor(C_MUTED);
+          tft.print("m/s ");
+        } else {
+          tft.print("W -- ");
+        }
+        tft.print("R24h ");
+        tft.setTextColor(C_GOOD);
+        tft.print(lastRainAmount, 1);
+        tft.setTextColor(C_MUTED);
+        tft.print("mm");
+
+        lastZoneNameShort = zn;
+        lastWindTenths = windT;
+        lastRainTenths = rainT;
+      }
+    }
 
     tft.setTextColor(delayed ? C_WARN : C_MUTED);
-    const int statY = nextY + nextH + 4;
-    tft.fillRect(leftX + 4, statY, leftW - 8, 16, C_PANEL);
-    tft.setTextSize(1);
-    tft.setCursor(leftX + 8, statY + 2);
-    if (delayed) {
-      tft.print("Delay: ");
-      String cS = rainDelayCauseText();
-      tft.print(cS.c_str());
-    } else {
-      tft.print("Master ");
-      tft.print(systemMasterEnabled ? "ON" : "OFF");
+    const int statY = infoY + (showExtra ? 22 : 0) + 2;
+    String causeLine = delayed ? rainDelayCauseText() : "";
+    bool lineChanged = layoutChanged ||
+                       (delayed != lastDelayLine) ||
+                       (systemMasterEnabled != lastMasterLine) ||
+                       (causeLine != lastCauseLine);
+    if (lineChanged) {
+      tft.fillRect(leftX + 4, statY, leftW - 8, 16, C_PANEL);
+      tft.setTextSize(1);
+      tft.setCursor(leftX + 8, statY + 2);
+      if (delayed) {
+        tft.print("Delay: ");
+        tft.print(causeLine.c_str());
+      } else {
+        tft.print("Master ");
+        tft.print(systemMasterEnabled ? "ON" : "OFF");
+      }
+      lastDelayLine = delayed;
+      lastMasterLine = systemMasterEnabled;
+      lastCauseLine = causeLine;
+    }
+
+    // Extra space for 240x320: show min/max + gust card under status
+    const bool tallLayout = (contentH >= 170);
+    if (tallLayout) {
+      int extraY = statY + 18;
+      int extraH = contentY + contentH - extraY - 4;
+      if (extraH >= 24) {
+        int minT = isnan(todayMin_C) ? 1000 : (int)lroundf(todayMin_C);
+        int maxT = isnan(todayMax_C) ? 1000 : (int)lroundf(todayMax_C);
+        int gustT = isnan(maxGust24h_ms) ? 1000 : (int)lroundf(maxGust24h_ms * 10.0f);
+
+        bool extraChanged = layoutChanged || (minT != lastMinT) || (maxT != lastMaxT) || (gustT != lastGustT);
+        if (extraChanged) {
+          drawCard(leftX + 4, extraY, leftW - 8, extraH, C_PANEL, C_EDGE);
+          tft.setTextSize(1);
+          tft.setTextColor(C_MUTED);
+          tft.setCursor(leftX + 8, extraY + 4);
+          tft.print("Today");
+
+          tft.setTextColor(C_TEXT);
+          tft.setCursor(leftX + 8, extraY + 14);
+          if (minT == 1000 || maxT == 1000) {
+            tft.print("Min -- Max --");
+          } else {
+            tft.print("Min ");
+            tft.print(minT);
+            tft.print(" Max ");
+            tft.print(maxT);
+          }
+
+          tft.setTextColor(C_MUTED);
+          tft.setCursor(leftX + 8, extraY + 24);
+          tft.print("Gust ");
+          if (gustT == 1000) {
+            tft.print("--");
+          } else {
+            tft.setTextColor(C_WARN);
+            tft.print(maxGust24h_ms, 1);
+            tft.setTextColor(C_MUTED);
+          }
+          tft.print(" m/s");
+
+          lastMinT = minT;
+          lastMaxT = maxT;
+          lastGustT = gustT;
+        }
+      }
     }
 
     // Weather/tank
     int t0 = isnan(temp) ? -1000 : (int)lroundf(temp);
-    if (layoutChanged || t0 != lastTemp || hum != lastHum || pct != lastPct) {
-      const int statsH = 40;
+    char newArrow = lastTempArrow;
+    if (isfinite(temp)) {
+      if (isfinite(lastTempF)) {
+        float d = temp - lastTempF;
+        if (d > 0.1f) newArrow = '^';
+        else if (d < -0.1f) newArrow = 'v';
+      }
+    } else {
+      newArrow = '-';
+    }
+    bool arrowChanged = (newArrow != lastTempArrow);
+
+    if (layoutChanged || t0 != lastTemp || hum != lastHum || pct != lastPct || arrowChanged) {
       tft.fillRect(rightX + 4, contentY + 4, rightW - 8, statsH - 8, C_PANEL);
 
       tft.setTextSize(2);
@@ -2320,21 +2600,38 @@ void HomeScreen() {
       tft.setCursor(rightX + 8, contentY + 11); // push down for better centering
       tft.print("T:");
       if (isnan(temp)) tft.print("--");
-      else { tft.print(temp, 0); tft.print("C"); }
+      else { tft.print(temp, 0); tft.print("C"); tft.print(newArrow); }
       tft.print("  H:");
       if (hum < 0) tft.print("--");
       else { tft.print(hum); tft.print("%"); }
 
+      int pctClamped = constrain(pct, 0, 100);
+      tft.setTextSize(1);
       tft.setTextColor(C_MUTED);
       tft.setCursor(rightX + 8, contentY + 27);
+      tft.print("Tank ");
+      tft.print(pctClamped);
+      tft.print("%");
+
+      // Tank bar
+      int barX = rightX + 8;
+      int barY = contentY + statsH - 10;
+      int barW = rightW - 16;
+      int barH = 6;
+      tft.drawRect(barX, barY, barW, barH, C_EDGE);
+      int fillW = (barW - 2) * pctClamped / 100;
+      if (fillW < 0) fillW = 0;
+      uint16_t barColor = (pctClamped <= (int)tankLowThresholdPct) ? C_BAD : C_GOOD;
+      if (fillW > 0) tft.fillRect(barX + 1, barY + 1, fillW, barH - 2, barColor);
       
       lastTemp = t0;
+      lastTempF = isfinite(temp) ? temp : NAN;
+      lastTempArrow = newArrow;
       lastHum = hum;
       lastPct = pct;
     }
 
     // Zones grid
-    const int statsH = 40;
     const int zonesY = contentY + statsH + gap;
     const int zonesH = contentY + contentH - zonesY;
     const int gridY = zonesY + 14;
@@ -3190,7 +3487,7 @@ html += F("</b></a></div>");
   // --- JS ---
   html += F("<script>");
   html += F("function pad(n){return n<10?'0'+n:n;}");
-  html += F("let _devEpoch=null; let _tickTimer=null; let _lastTemp=null;");
+  html += F("let _devEpoch=null; let _tickTimer=null; let _lastTemp=null; let _lastTempTrend='\\u2192';");
   html += F("function startDeviceClock(seedSec){_devEpoch=seedSec;if(_tickTimer)clearInterval(_tickTimer);");
   html += F("const draw=()=>{if(_devEpoch==null)return; const d=new Date(_devEpoch*1000);");
   html += F("const h=pad(d.getHours()),m=pad(d.getMinutes()),s=pad(d.getSeconds());");
@@ -3287,13 +3584,13 @@ html += F("</b></a></div>");
   html += F("if(suns) suns.textContent = st.sunsetLocal  || '--:--';");
   html += F("if(press){ const p=st.pressure; press.textContent=(typeof p==='number' && p>0)?p.toFixed(0):'--'; }");
   html += F("const tempEl=document.getElementById('tempChip'); const trendEl=document.getElementById('tempTrend');");
-  html += F("if(tempEl){ const v=st.temp; let arrow='\\u2192';");
+  html += F("if(tempEl){ const v=st.temp;");
   html += F("  if(typeof v==='number'){");
   html += F("    tempEl.textContent=v.toFixed(1)+' C';");
-  html += F("    if(_lastTemp!==null){ const d=v-_lastTemp; if(d>0.1) arrow='\\u2191'; else if(d<-0.1) arrow='\\u2193'; }");
+  html += F("    if(_lastTemp!==null){ const d=v-_lastTemp; if(d>0.1) _lastTempTrend='\\u2191'; else if(d<-0.1) _lastTempTrend='\\u2193'; }");
   html += F("    _lastTemp=v;");
-  html += F("  } else { tempEl.textContent='--'; _lastTemp=null; }");
-  html += F("  if(trendEl){ trendEl.textContent=arrow; trendEl.style.color=(arrow==='\\u2191')?'#16a34a':(arrow==='\\u2193')?'#dc2626':'inherit'; }");
+  html += F("  } else { tempEl.textContent='--'; _lastTemp=null; _lastTempTrend='\\u2192'; }");
+  html += F("  if(trendEl){ trendEl.textContent=_lastTempTrend; trendEl.style.color=(_lastTempTrend==='\\u2191')?'#16a34a':(_lastTempTrend==='\\u2193')?'#dc2626':'inherit'; }");
   html += F("}");
   html += F("const feelsEl=document.getElementById('feelsChip'); if(feelsEl){ const v=st.feels_like; feelsEl.textContent=(typeof v==='number')?v.toFixed(1)+' C':'--'; }");
   html += F("const humEl=document.getElementById('humChip'); if(humEl){ const v=st.humidity; humEl.textContent=(typeof v==='number')?Math.round(v)+' %':'--'; }");
@@ -3371,6 +3668,7 @@ void handleSetupPage() {
   html += F(".row{display:flex;align-items:center;gap:12px;margin:10px 0;flex-wrap:wrap}.row small{color:#9fb0ca;font-size:.85rem}");
   html += F(".btn{background:linear-gradient(180deg,#1c74d9,#165fba);color:#fff;border:1px solid rgba(0,0,0,.18);border-radius:12px;padding:10px 14px;font-weight:700;cursor:pointer;box-shadow:0 6px 16px rgba(25,118,210,.25);font-size:.95rem}");
   html += F(".btn-alt{background:#1b2537;color:#e8eef6;border:1px solid #2a3954;border-radius:12px;padding:10px 14px;font-size:.95rem}");
+  html += F(".btn-danger{background:linear-gradient(180deg,#ef4444,#b91c1c);border:1px solid rgba(185,28,28,.6)}");
   html += F(".btn,.btn-alt{transition:transform .06s ease,box-shadow .06s ease,filter .06s ease}");
   html += F(".btn:active,.btn-alt:active{transform:translateY(1px);box-shadow:inset 0 2px 6px rgba(0,0,0,.25)}");
   html += F(".btn,.btn-alt{position:relative;overflow:hidden}");
@@ -3444,7 +3742,7 @@ void handleSetupPage() {
   // Run mode
   html += F("<div class='row switchline'><label>Run Mode</label>");
   html += F("<label><input type='checkbox' name='runConcurrent' "); html += (runZonesConcurrent ? "checked" : "");
-  html += F("> Run Zones Together</label><small>Unchecked = One at a time</small></div>");
+  html += F("> Run Zones Together</label><small>Unchecked = One at a time. If enabled, ensure your power supply can handle multiple valves running at once.</small></div>");
   html += F("</div>");
 
   // Tank (available for all modes; water source switching works with any zone count)
@@ -3486,6 +3784,60 @@ void handleSetupPage() {
   html += F("</div>"); // end tankCard
   html += F("</div>");
 
+  // Display / Auto backlight
+  html += F("<div class='card narrow'><h3>Display</h3>");
+  html += F("<div class='row switchline'><label>Auto Backlight (LDR)</label><input type='checkbox' name='photoAuto' ");
+  html += (photoAutoEnabled ? "checked" : "");
+  html += F("><small>Turn off TFT when it is dark</small></div>");
+  if (tftBlPin < 0) {
+    html += F("<div class='row helptext'><label></label><small>No BL pin set; will use display sleep (backlight stays on).</small></div>");
+  }
+  int photoRaw = isValidAdcPin(photoPin) ? analogRead(photoPin) : -1;
+  html += F("<div class='row'><label>Photo Raw</label><div class='chip'>");
+  if (photoRaw < 0) html += F("--");
+  else html += String(photoRaw);
+  html += F("</div><small>0-4095 ADC</small></div>");
+  html += F("<div class='row'><label>Photo GPIO</label><input class='in-xs' type='number' min='1' max='20' name='photoPin' value='");
+  html += String(photoPin);
+  html += F("'><small>ADC pin (ESP32-S3: GPIO1-20)</small></div>");
+  html += F("<div class='row'><label>Dark Threshold</label><input class='in-sm' type='number' min='0' max='4095' name='photoThreshold' value='");
+  html += String(photoThreshold);
+  html += F("'><small>ADC raw value where screen turns off</small></div>");
+  html += F("<div class='row switchline'><label>Invert Sensor</label><input type='checkbox' name='photoInvert' ");
+  html += (photoInvert ? "checked" : "");
+  html += F("><small>Enable if your LDR reads higher when dark</small></div>");
+  html += F("</div>");
+
+  // SPI (TFT) config
+  html += F("<div class='card narrow'><h3>SPI (TFT)</h3>");
+  html += F("<div class='row'><label>TFT Size</label><div class='chip'>");
+  html += String(TFT_W); html += "x"; html += String(TFT_H);
+  html += F("</div><small>Set in code</small></div>");
+  html += F("<datalist id='tftPins'>");
+  for (int p = 1; p <= 48; ++p) {
+    if (!isUnsafeTftPin(p)) { html += F("<option value='"); html += String(p); html += F("'>"); }
+  }
+  html += F("</datalist>");
+  html += F("<datalist id='tftPinsOrNone'><option value='-1'>");
+  for (int p = 1; p <= 48; ++p) {
+    if (!isUnsafeTftPin(p)) { html += F("<option value='"); html += String(p); html += F("'>"); }
+  }
+  html += F("</datalist>");
+  html += F("<div class='row'><label>SCK</label><input class='in-xs' type='number' min='1' max='48' list='tftPins' name='tftSclk' value='");
+  html += String(tftSclkPin); html += F("'></div>");
+  html += F("<div class='row'><label>MOSI</label><input class='in-xs' type='number' min='1' max='48' list='tftPins' name='tftMosi' value='");
+  html += String(tftMosiPin); html += F("'></div>");
+  html += F("<div class='row'><label>CS</label><input class='in-xs' type='number' min='1' max='48' list='tftPins' name='tftCs' value='");
+  html += String(tftCsPin); html += F("'></div>");
+  html += F("<div class='row'><label>DC</label><input class='in-xs' type='number' min='1' max='48' list='tftPins' name='tftDc' value='");
+  html += String(tftDcPin); html += F("'></div>");
+  html += F("<div class='row'><label>RST</label><input class='in-xs' type='number' min='-1' max='48' list='tftPinsOrNone' name='tftRst' value='");
+  html += String(tftRstPin); html += F("'><small>-1 = not used</small></div>");
+  html += F("<div class='row'><label>BL</label><input class='in-xs' type='number' min='-1' max='48' list='tftPinsOrNone' name='tftBl' value='");
+  html += String(tftBlPin); html += F("'><small>-1 = not used</small></div>");
+  html += F("<div class='row helptext'><label></label><small>Changing TFT pins requires reboot. Use GPIO 1-48 excluding 19/20 (USB), 0/45/46 (strapping), 9-14 & 35-38 (flash/PSRAM).</small></div>");
+  html += F("</div>");
+
   // Physical rain & forecast
   html += F("<div class='card narrow'><h3>Rain Sources</h3>");
   html += F("<div class='row switchline'><label>Disable OWM Rain</label><input type='checkbox' name='rainForecastDisabled' ");
@@ -3502,6 +3854,7 @@ void handleSetupPage() {
   html += F("<button class='btn' type='submit'>Save</button>");
   html += F("<button class='btn-alt' formaction='/' formmethod='GET'>Home</button>");
   html += F("<button class='btn-alt' type='button' onclick=\"fetch('/clear_cooldown',{method:'POST'})\">Clear Cooldown</button>");
+  html += F("<button class='btn btn-danger' type='button' onclick=\"if(confirm('Reboot controller now?'))fetch('/reboot',{method:'POST'})\">Reboot</button>");
   html += F("</div></div>");
 
   // Delays & Pause + thresholds
@@ -3630,9 +3983,9 @@ void handleSetupPage() {
   // IANA input + themed select
   html += F("<div class='row'><label>Select Timezone</label>");
   html += F("<div style='flex:1;display:grid;gap:6px'>");
-  html += F("<input class='in-med' type='text' name='tzIANA' value='");
+  html += F("<input type='hidden' name='tzIANA' value='");
   html += tzIANA;
-  html += F("' placeholder='Australia/Adelaide'>");
+  html += F("'>");
   html += F("<select class='in-med' id='tzIANASelect'><option value=''>Select from list</option></select>");
   html += F("</div>");
   html += F("</div>");
@@ -4060,6 +4413,25 @@ void loadConfig() {
   }
   }
 
+  // NEW: photoresistor auto-backlight (optional trailing lines)
+  if (f.available()) { if ((s = _safeReadLine(f)).length()) photoAutoEnabled = (s.toInt() == 1); }
+  if (f.available()) { 
+    if ((s = _safeReadLine(f)).length()) {
+      int p = s.toInt();
+      photoPin = isValidAdcPin(p) ? p : -1;
+    }
+  }
+  if (f.available()) { if ((s = _safeReadLine(f)).length()) photoThreshold = s.toInt(); }
+  if (f.available()) { if ((s = _safeReadLine(f)).length()) photoInvert = (s.toInt() == 1); }
+
+  // NEW: TFT SPI pins (optional trailing lines)
+  if (f.available()) { if ((s = _safeReadLine(f)).length()) { int p=s.toInt(); if (isValidGpioPin(p) && !isUnsafeTftPin(p)) tftSclkPin = p; } }
+  if (f.available()) { if ((s = _safeReadLine(f)).length()) { int p=s.toInt(); if (isValidGpioPin(p) && !isUnsafeTftPin(p)) tftMosiPin = p; } }
+  if (f.available()) { if ((s = _safeReadLine(f)).length()) { int p=s.toInt(); if (isValidGpioPin(p) && !isUnsafeTftPin(p)) tftCsPin   = p; } }
+  if (f.available()) { if ((s = _safeReadLine(f)).length()) { int p=s.toInt(); if (isValidGpioPin(p) && !isUnsafeTftPin(p)) tftDcPin   = p; } }
+  if (f.available()) { if ((s = _safeReadLine(f)).length()) { int p=s.toInt(); if ((p == -1) || (isValidGpioPin(p) && !isUnsafeTftPin(p))) tftRstPin = p; } }
+  if (f.available()) { if ((s = _safeReadLine(f)).length()) { int p=s.toInt(); if ((p == -1) || (isValidGpioPin(p) && !isUnsafeTftPin(p))) tftBlPin  = p; } }
+
   f.close();
 
   // Derive hours from minutes (for UI & cooldown logic)
@@ -4138,6 +4510,18 @@ void saveConfig() {
   f.println(gpioActiveLow ? 1 : 0);
   // NEW: tank level sensor pin (ADC)
   f.println(tankLevelPin);
+  // NEW: photoresistor auto-backlight
+  f.println(photoAutoEnabled ? 1 : 0);
+  f.println(photoPin);
+  f.println(photoThreshold);
+  f.println(photoInvert ? 1 : 0);
+  // NEW: TFT SPI pins
+  f.println(tftSclkPin);
+  f.println(tftMosiPin);
+  f.println(tftCsPin);
+  f.println(tftDcPin);
+  f.println(tftRstPin);
+  f.println(tftBlPin);
 
   f.close();
 }
@@ -4203,6 +4587,12 @@ void handleConfigure() {
     // NEW: snapshot current values before applying POST changes
   String oldApiKey = apiKey;
   String oldCity   = city;
+  int oldTftSclk = tftSclkPin;
+  int oldTftMosi = tftMosiPin;
+  int oldTftCs   = tftCsPin;
+  int oldTftDc   = tftDcPin;
+  int oldTftRst  = tftRstPin;
+  int oldTftBl   = tftBlPin;
 
   // Weather
   if (server.hasArg("apiKey")) apiKey = server.arg("apiKey");
@@ -4324,6 +4714,44 @@ void handleConfigure() {
     int p = server.arg("tankLevelPin").toInt();
     if (isValidAdcPin(p)) tankLevelPin = p;
   }
+  // Photoresistor auto-backlight
+  photoAutoEnabled = server.hasArg("photoAuto");
+  if (server.hasArg("photoPin")) {
+    int p = server.arg("photoPin").toInt();
+    if (isValidAdcPin(p)) photoPin = p;
+  }
+  if (server.hasArg("photoThreshold")) {
+    int th = server.arg("photoThreshold").toInt();
+    if (th < 0) th = 0;
+    if (th > 4095) th = 4095;
+    photoThreshold = th;
+  }
+  photoInvert = server.hasArg("photoInvert");
+  // TFT SPI pins (apply on reboot)
+  if (server.hasArg("tftSclk")) {
+    int p = server.arg("tftSclk").toInt();
+    if (isValidGpioPin(p) && !isUnsafeTftPin(p)) tftSclkPin = p;
+  }
+  if (server.hasArg("tftMosi")) {
+    int p = server.arg("tftMosi").toInt();
+    if (isValidGpioPin(p) && !isUnsafeTftPin(p)) tftMosiPin = p;
+  }
+  if (server.hasArg("tftCs")) {
+    int p = server.arg("tftCs").toInt();
+    if (isValidGpioPin(p) && !isUnsafeTftPin(p)) tftCsPin = p;
+  }
+  if (server.hasArg("tftDc")) {
+    int p = server.arg("tftDc").toInt();
+    if (isValidGpioPin(p) && !isUnsafeTftPin(p)) tftDcPin = p;
+  }
+  if (server.hasArg("tftRst")) {
+    int p = server.arg("tftRst").toInt();
+    if (p == -1 || (isValidGpioPin(p) && !isUnsafeTftPin(p))) tftRstPin = p;
+  }
+  if (server.hasArg("tftBl")) {
+    int p = server.arg("tftBl").toInt();
+    if (p == -1 || (isValidGpioPin(p) && !isUnsafeTftPin(p))) tftBlPin = p;
+  }
   if (server.hasArg("manualSelectPin")) {
     int p = server.arg("manualSelectPin").toInt();
     if ((p >= -1 && p <= 39)) manualSelectPin = p;
@@ -4365,6 +4793,13 @@ void handleConfigure() {
   if (server.hasArg("mqttPass"))   mqttPass   = server.arg("mqttPass");
   if (server.hasArg("mqttBase"))   mqttBase   = server.arg("mqttBase");
 
+  bool tftPinsChanged = (oldTftSclk != tftSclkPin ||
+                         oldTftMosi != tftMosiPin ||
+                         oldTftCs   != tftCsPin   ||
+                         oldTftDc   != tftDcPin   ||
+                         oldTftRst  != tftRstPin  ||
+                         oldTftBl   != tftBlPin);
+
   // Persist and re-apply runtime things
   saveConfig();
   initManualButtons();
@@ -4401,6 +4836,12 @@ void handleConfigure() {
 
   server.sendHeader("Location", "/setup", true);
   server.send(302, "text/plain", "");
+
+  if (tftPinsChanged) {
+    Serial.println("[CFG] TFT pin mapping changed, restarting to apply...");
+    delay(200);
+    ESP.restart();
+  }
 }
 
 void handleClearEvents() {
