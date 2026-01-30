@@ -1,11 +1,7 @@
-//SPI TFT / ESP32 
+//130x230 SPI TFT / ESP32 
 
 #ifndef ENABLE_DEBUG_ROUTES
   #define ENABLE_DEBUG_ROUTES 0   // set to 1 when you need them
-#endif
-#if ENABLE_DEBUG_ROUTES
-  server.on("/i2c-test", HTTP_GET, handleI2CTest);
-  server.on("/whereami", HTTP_GET, handleWhereAmI);
 #endif
 #ifndef ENABLE_OTA
   #define ENABLE_OTA 0  
@@ -20,6 +16,7 @@
 #include <DNSServer.h>
 #include <WiFiManager.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <WebServer.h>
 #include <HTTPClient.h>
 #include <Wire.h>
@@ -33,6 +30,7 @@
 extern "C" {
   #include "esp_log.h"
   #include "driver/temp_sensor.h"
+  #include "esp_wifi.h"
 }
 #include <time.h>
 #include <ESPmDNS.h> 
@@ -40,8 +38,8 @@ extern "C" {
 
 // ---------- Hardware ----------
 static const uint8_t MAX_ZONES = 16;
-constexpr uint8_t I2C_SDA = 4;
-constexpr uint8_t I2C_SCL = 15;
+constexpr uint8_t I2C_SDA = 8;
+constexpr uint8_t I2C_SCL = 9;
 #ifndef STATUS_PIXEL_PIN
 #define STATUS_PIXEL_PIN 48   // ESP32-S3 DevKitC-1 onboard WS2812; set -1 to disable
 #endif
@@ -64,8 +62,8 @@ static constexpr int16_t TFT_H = 320;
 // Defaults (editable from Setup -> SPI (TFT)):
 static const int TFT_SCLK_DEFAULT = 41;  // SCL
 static const int TFT_MOSI_DEFAULT = 42;  // SDA
-static const int TFT_CS_DEFAULT   = 1;   // CS
-static const int TFT_DC_DEFAULT   = 2;   // DC
+static const int TFT_CS_DEFAULT   = 1;  // CS (avoid GPIO1 tank ADC)
+static const int TFT_DC_DEFAULT   = 2;  // DC (avoid GPIO2 LED)
 static const int TFT_RST_DEFAULT  = 21;  // RST (-1 allowed)
 static const int TFT_BL_DEFAULT   = -1;  // or -1 if tied to 3V3
 
@@ -145,19 +143,19 @@ bool relayActiveHigh = true;
 bool tankEnabled     = true;
 
 int zonePins[MAX_ZONES] = {
-  18, 19, 12, 14, -1, -1,  // defaults: first 4 use PCF, keep P4/P5 free for mains/tank
-  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1   // spare slots up to 16
+  15, 16, 17, 18, 4, 5,  // defaults: first 4 use PCF, keep P4/P5 free for mains/tank
+  6, 7, -1, -1, -1, -1, -1, -1, -1, -1   // spare slots up to 16
 };
 int mainsPin = 25;
 int tankPin  = 26;
-int tankLevelPin = 1; // ADC input (ESP32-S3: GPIO1..20 are ADC)
+int tankLevelPin = 19; // ADC input (ESP32-S3: GPIO1..20 are ADC)
 
-const int LED_PIN  = 2;
+const int LED_PIN  = -1;
 
 // Physical rain sensor
 bool rainSensorEnabled = false;
 bool rainSensorInvert  = false;
-int  rainSensorPin     = 15;
+int  rainSensorPin     = 16;
 
 // Physical manual control buttons (disabled by default)
 int manualSelectPin = -1;   // cycles the target zone (INPUT_PULLUP, -1 = disabled)
@@ -384,10 +382,14 @@ String mqttBase    = "espirrigation";
 WiFiClient   _mqttNetCli;
 PubSubClient _mqtt(_mqttNetCli);
 uint32_t     _lastMqttPub = 0;
+uint32_t     _lastMqttAttempt = 0;
 
 void mqttSetup(){
   if (!mqttEnabled || mqttBroker.length()==0) return;
   _mqtt.setServer(mqttBroker.c_str(), mqttPort);
+  _mqtt.setBufferSize(2048);
+  _mqtt.setKeepAlive(30);
+  _mqtt.setSocketTimeout(5);
   _mqtt.setCallback([](char* topic, byte* payload, unsigned int len){
     String t(topic), msg; msg.reserve(len);
     for (unsigned i=0;i<len;i++) msg += (char)payload[i];
@@ -412,13 +414,23 @@ void mqttSetup(){
   });
 }
 void mqttEnsureConnected(){
-  if (!mqttEnabled) return;
+  if (!mqttEnabled || mqttBroker.length()==0) return;
+  if (WiFi.status() != WL_CONNECTED) return;
   if (_mqtt.connected()) return;
+  const uint32_t now = millis();
+  if (now - _lastMqttAttempt < 5000) return;
+  _lastMqttAttempt = now;
   String cid = "espirrigation-" + WiFi.macAddress();
-  if (_mqtt.connect(cid.c_str(),
-      mqttUser.length()?mqttUser.c_str():nullptr,
-      mqttPass.length()?mqttPass.c_str():nullptr)) {
+  bool ok = false;
+  if (mqttUser.length()) {
+    ok = _mqtt.connect(cid.c_str(), mqttUser.c_str(), mqttPass.c_str());
+  } else {
+    ok = _mqtt.connect(cid.c_str());
+  }
+  if (ok) {
     _mqtt.subscribe( (mqttBase + "/cmd/#").c_str() );
+  } else {
+    Serial.printf("[MQTT] connect failed, rc=%d\n", _mqtt.state());
   }
 }
 
@@ -554,6 +566,14 @@ static inline void chooseWaterSource(const char*& src, bool& mainsOn, bool& tank
 
 bool physicalRainNowRaw() {
   if (!rainSensorEnabled) return false;
+  if (rainSensorPin < 0 || rainSensorPin > 39) {
+    static bool warned = false;
+    if (!warned) {
+      Serial.printf("[RAIN] Invalid rainSensorPin=%d; ignoring sensor.\n", rainSensorPin);
+      warned = true;
+    }
+    return false;
+  }
   pinMode(rainSensorPin, INPUT_PULLUP);
   int v = digitalRead(rainSensorPin); // LOW=dry, HIGH=wet (NC default)
   bool wet = (v == HIGH);
@@ -696,6 +716,66 @@ inline bool isUnsafeTftPin(int pin) {
           (pin >= 9 && pin <= 14) || (pin >= 35 && pin <= 38));
 }
 
+static void warnPinConflict(const char* aName, int aPin, const char* bName, int bPin) {
+  if (aPin < 0 || bPin < 0) return;
+  if (aPin != bPin) return;
+  Serial.printf("[PIN] Conflict: %s and %s both on GPIO%d\n", aName, bName, aPin);
+}
+
+static void sanitizePinConfig() {
+  auto clampGpio = [](int &p) {
+    if (p < 0 || p > 39) p = -1;
+  };
+
+  // Zone + source GPIOs
+  for (uint8_t i = 0; i < MAX_ZONES; i++) {
+    clampGpio(zonePins[i]);
+  }
+  clampGpio(mainsPin);
+  clampGpio(tankPin);
+
+  // Optional inputs
+  clampGpio(rainSensorPin);
+  clampGpio(manualSelectPin);
+  clampGpio(manualStartPin);
+
+  // ADC-only pins
+  if (!isValidAdcPin(tankLevelPin)) tankLevelPin = 1; // safe default
+  if (!isValidAdcPin(photoPin)) photoPin = -1;
+
+  // TFT pins: fall back to safe defaults if invalid/unsafe
+  if (!(isValidGpioPin(tftSclkPin) && !isUnsafeTftPin(tftSclkPin))) tftSclkPin = TFT_SCLK_DEFAULT;
+  if (!(isValidGpioPin(tftMosiPin) && !isUnsafeTftPin(tftMosiPin))) tftMosiPin = TFT_MOSI_DEFAULT;
+  if (!(isValidGpioPin(tftCsPin)   && !isUnsafeTftPin(tftCsPin)))   tftCsPin   = TFT_CS_DEFAULT;
+  if (!(isValidGpioPin(tftDcPin)   && !isUnsafeTftPin(tftDcPin)))   tftDcPin   = TFT_DC_DEFAULT;
+
+  // Optional TFT pins
+  if (!(tftRstPin == -1 || (isValidGpioPin(tftRstPin) && !isUnsafeTftPin(tftRstPin)))) tftRstPin = TFT_RST_DEFAULT;
+  if (!(tftBlPin  == -1 || (isValidGpioPin(tftBlPin)  && !isUnsafeTftPin(tftBlPin))))  tftBlPin  = TFT_BL_DEFAULT;
+}
+
+static void validatePinMap() {
+  // I2C vs sensors
+  warnPinConflict("I2C_SDA", I2C_SDA, "RainSensor", rainSensorPin);
+  warnPinConflict("I2C_SCL", I2C_SCL, "RainSensor", rainSensorPin);
+  warnPinConflict("I2C_SDA", I2C_SDA, "TankLevel", tankLevelPin);
+  warnPinConflict("I2C_SCL", I2C_SCL, "TankLevel", tankLevelPin);
+
+  // TFT vs board IO
+  warnPinConflict("TFT_CS",  tftCsPin,  "TankLevel", tankLevelPin);
+  warnPinConflict("TFT_DC",  tftDcPin,  "LED",       LED_PIN);
+  warnPinConflict("TFT_CS",  tftCsPin,  "LED",       LED_PIN);
+  warnPinConflict("TFT_DC",  tftDcPin,  "TankLevel", tankLevelPin);
+  warnPinConflict("TFT_SCLK",tftSclkPin,"RainSensor",rainSensorPin);
+  warnPinConflict("TFT_MOSI",tftMosiPin,"RainSensor",rainSensorPin);
+
+  // TFT self-collisions
+  warnPinConflict("TFT_SCLK",tftSclkPin,"TFT_MOSI", tftMosiPin);
+  warnPinConflict("TFT_CS",  tftCsPin,  "TFT_DC",   tftDcPin);
+  warnPinConflict("TFT_CS",  tftCsPin,  "TFT_RST",  tftRstPin);
+  warnPinConflict("TFT_CS",  tftCsPin,  "TFT_BL",   tftBlPin);
+}
+
 void statusPixelSet(uint8_t r,uint8_t g,uint8_t b) {
   if (!statusPixelReady) return;
   statusPixel.setPixelColor(0, statusPixel.Color(r,g,b));
@@ -769,6 +849,15 @@ static inline void tftDisplay(bool on){
 
 static inline void tftBacklight(bool on){
   if (tftBlPin >= 0) {
+    if (!isValidGpioPin(tftBlPin)) {
+      static bool warned = false;
+      if (!warned) {
+        Serial.printf("[TFT] Invalid tftBlPin=%d; disabling backlight pin.\n", tftBlPin);
+        warned = true;
+      }
+      tftBlPin = -1;
+      return;
+    }
     if (g_tftPwmReady) {
       ledcWrite(TFT_PWM_CH, on ? g_tftBrightness : 0);
     } else {
@@ -866,6 +955,7 @@ static void tftHeader(const char* title){
 // ---------- Setup ----------
 void setup() {
   Serial.begin(115200);
+  Serial.printf("[BOOT] %s %s\n", __DATE__, __TIME__);
 
   // Clamp noisy logs (IDF)
   esp_log_level_set("*", ESP_LOG_WARN);
@@ -890,6 +980,8 @@ void setup() {
 
   // Config + schedule
   loadConfig();
+  sanitizePinConfig();
+  validatePinMap();
   if (!LittleFS.exists("/schedule.txt")) saveSchedule();
   loadSchedule();
   initManualButtons();
@@ -974,6 +1066,13 @@ void setup() {
   WiFi.setSleep(false); // NEW: disable modem sleep for snappier responses
   WiFi.setTxPower(WIFI_POWER_19_5dBm); // boost TX within legal limit
   WiFi.enableLongRange(true);          // trade speed for sensitivity
+  {
+    esp_err_t err = esp_wifi_set_protocol(WIFI_IF_STA,
+      WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_LR);
+    if (err != ESP_OK) {
+      Serial.printf("[WiFi] set_protocol failed: %d\n", (int)err);
+    }
+  }
 
   tft.fillScreen(ST77XX_BLACK);
 
@@ -1225,12 +1324,23 @@ void setup() {
   });
 
   // I2C tools
+#if ENABLE_DEBUG_ROUTES
   server.on("/i2c-test", HTTP_GET, [](){
     HttpScope _scope;
     if (useGpioFallback) { server.send(500,"text/plain","Fallback active"); return; }
     for (uint8_t ch : PCH) { pcfOut.digitalWrite(ch, LOW); delay(100); pcfOut.digitalWrite(ch, HIGH); delay(60); }
     server.send(200,"text/plain","PCF8574 pulse OK");
   });
+  server.on("/whereami", HTTP_GET, [](){
+    HttpScope _scope;
+    String out;
+    out.reserve(96);
+    out += "ip=";   out += WiFi.localIP().toString(); out += "\n";
+    out += "ssid="; out += WiFi.SSID();               out += "\n";
+    out += "mac=";  out += WiFi.macAddress();
+    server.send(200,"text/plain",out);
+  });
+#endif
   
   // Downloads / Admin
   server.on("/download/config.txt", HTTP_GET, [](){
@@ -1322,6 +1432,7 @@ void loop() {
   wifiCheck();
   checkWindRain();
   mqttEnsureConnected();
+  if (mqttEnabled) _mqtt.loop();
   mqttPublishStatus(); 
   tickWeather(); // Timed weather fetch after servicing HTTP to avoid blocking the UI
   tickManualButtons();
@@ -1467,6 +1578,11 @@ void wifiCheck() {
       WiFi.setSleep(false); // keep disabled after reconnect
       WiFi.setTxPower(WIFI_POWER_19_5dBm);
       WiFi.enableLongRange(true);
+      esp_err_t err = esp_wifi_set_protocol(WIFI_IF_STA,
+        WIFI_PROTOCOL_11B | WIFI_PROTOCOL_11G | WIFI_PROTOCOL_11N | WIFI_PROTOCOL_LR);
+      if (err != ESP_OK) {
+        Serial.printf("[WiFi] set_protocol failed: %d\n", (int)err);
+      }
     } else {
       Serial.println("Reconnection failed (kept creds, not opening portal).");
     }
@@ -1606,10 +1722,12 @@ void tickManualButtons() {
 // ---------- Weather / Forecast ----------
 String fetchWeather() {
   if (apiKey.length()<5 || city.length()<1) return "";
-  HTTPClient http; 
+  HTTPClient http;
+  WiFiClientSecure secure;
+  secure.setInsecure(); // minimal HTTPS setup; replace with CA cert for full validation
   http.setTimeout(2500); // NEW: shorter timeout
-  String url="http://api.openweathermap.org/data/2.5/weather?id="+city+"&appid="+apiKey+"&units=metric";
-  http.begin(client,url);
+  String url="https://api.openweathermap.org/data/2.5/weather?id="+city+"&appid="+apiKey+"&units=metric";
+  http.begin(secure,url);
   int code=http.GET();
   if (code != 200) {
     http.end();
@@ -1622,15 +1740,17 @@ String fetchWeather() {
 
 String fetchForecast(float lat, float lon) {
   if (apiKey.length() < 5) return "";
-  HTTPClient http; 
+  HTTPClient http;
+  WiFiClientSecure secure;
+  secure.setInsecure(); // minimal HTTPS setup; replace with CA cert for full validation
   http.setTimeout(3000); // NEW: shorter timeout
 
-  String url = "http://api.openweathermap.org/data/2.5/onecall?lat=" + String(lat,6) +
+  String url = "https://api.openweathermap.org/data/2.5/onecall?lat=" + String(lat,6) +
                "&lon=" + String(lon,6) +
                "&appid=" + apiKey +
                "&units=metric&exclude=minutely,alerts";
 
-  http.begin(client, url);
+  http.begin(secure, url);
   int code = http.GET();
   if (code != 200) {
     http.end();
@@ -1703,7 +1823,7 @@ void updateCachedWeather() {
 
   // Extract coordinates and 1h rain
   {
-    DynamicJsonDocument js(1024);
+    DynamicJsonDocument js(2048);
     if (deserializeJson(js, cachedWeatherData) == DeserializationError::Ok) {
       if (js["coord"]["lat"].is<float>() && js["coord"]["lon"].is<float>()) {
         lat = js["coord"]["lat"].as<float>();
@@ -1854,7 +1974,7 @@ bool checkWindRain() {
   bool newWindActual        = false;   // raw wind above threshold
 
   // --- 1) Parse cached weather JSON (OpenWeather) ---
-  DynamicJsonDocument js(1024);
+  DynamicJsonDocument js(2048);
   DeserializationError err = deserializeJson(js, cachedWeatherData);
 
   if (!err) {
@@ -2294,7 +2414,7 @@ void RainScreen(){
 }
 
 void HomeScreen() {
-  DynamicJsonDocument js(1024);
+  DynamicJsonDocument js(2048);
   (void)deserializeJson(js, cachedWeatherData);
 
   float temp = js["main"]["temp"] | NAN;
@@ -3114,7 +3234,7 @@ void handleRoot() {
 
   // Keep this - it respects the g_inHttp guard
   updateCachedWeather();
-  DynamicJsonDocument js(1024);
+  DynamicJsonDocument js(2048);
   DeserializationError werr = deserializeJson(js, cachedWeatherData);
 
   // Safe reads
@@ -3135,7 +3255,15 @@ void handleRoot() {
   const String causeText = rainDelayCauseText();
 
   // --- HTML ---
-  String html; html.reserve(40000);
+  String html; html.reserve(6000);
+  server.setContentLength(CONTENT_LENGTH_UNKNOWN);
+  server.send(200, "text/html", "");
+  auto flush = [&](){
+    if (html.length()) {
+      server.sendContent(html);
+      html = "";
+    }
+  };
   html += F("<!doctype html><html lang='en' data-theme='light'><head>");
   html += F("<meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>");
   html += F("<title>ESP32 Irrigation</title>");
@@ -3257,6 +3385,7 @@ void handleRoot() {
   html += F(".card h3{font-size:1.12rem;}");
   html += F("}");
   html += F("</style></head><body>");
+  flush();
 
   // --- Nav ---
   html += F("<div class='nav'><div class='in'>");
@@ -3338,6 +3467,7 @@ html += F("</b></a></div>");
   html += F("</div><div class='hint'>Active weather delays cancel watering if scheduled.</div></div>");
 
   html += F("</div></div>"); // end glass / grid
+  flush();
 
   // ---------- Schedules (collapsible) ----------
   static const char* DLBL[7] = {"Sun","Mon","Tue","Wed","Thu","Fri","Sat"};
@@ -3416,6 +3546,7 @@ html += F("</b></a></div>");
     // Actions
     html += F("<div class='toolbar' style='justify-content:flex-end'><button class='btn' type='submit'>Save Zone</button></div>");
     html += F("</form></div>");
+    flush();
   }
 
   html += F("</div>"); // .sched-grid
@@ -3423,6 +3554,7 @@ html += F("</b></a></div>");
             "<button class='btn' id='btn-save-all' title='Save all zone schedules'>Save All</button>"
             "</div>");
   html += F("</div></div></div>"); // #schedBody, .card.sched, .center
+  flush();
 
     // --- Live Zones ---
   html += F("<div class='center' style='margin-top:12px'><div class='card'>");
@@ -3545,9 +3677,11 @@ html += F("</b></a></div>");
     html += F("</div>"); // .toolbar
 
     html += F("</div>"); // .zone-card
+    flush();
   }
 
   html += F("</div></div></div>"); // Close zones block
+  flush();
 
   // --- Tools / System Controls ---
   html += F("<div class='grid center' style='margin:12px auto 20px'><div class='card' style='grid-column:1/-1'>");
@@ -3556,12 +3690,14 @@ html += F("</b></a></div>");
   html += F("<a class='btn btn-secondary' href='/events'>Events</a>");
   html += F("<a class='btn btn-secondary' href='/status'>Status JSON</a>");
   html += F("</div></div></div>");
+  flush();
 
   html += F("<div class='grid center' style='margin:0 auto 24px'><div class='card' style='grid-column:1/-1'>");
   html += F("<h3>System Controls</h3><div class='toolbar'>");
   html += F("<button class='btn btn-secondary' id='toggle-backlight-btn' title='Invert OLED (night mode)'>LCD Toggle</button>");
   html += F("<button class='btn btn-danger' id='rebootBtn'>Reboot</button>");
   html += F("</div></div></div>");
+  flush();
 
   // --- JS ---
   html += F("<script>");
@@ -3714,8 +3850,8 @@ html += F("</b></a></div>");
   html += F("}");
 
   html += F("</script></body></html>");
-
-  server.send(200, "text/html", html);
+  flush();
+  server.sendContent("");
 }
 
 // Setup Page 
@@ -4385,6 +4521,7 @@ static String _safeReadLine(File& f) {
 }
 
 void loadConfig() {
+  if (!LittleFS.exists("/config.txt")) return;
   File f = LittleFS.open("/config.txt", "r");
   if (!f) return;
 
@@ -4409,7 +4546,10 @@ void loadConfig() {
     zonesCount = (uint8_t)z;
   }
   if ((s = _safeReadLine(f)).length()) rainSensorEnabled = (s.toInt() == 1);
-  if ((s = _safeReadLine(f)).length()) rainSensorPin     = s.toInt();
+  if ((s = _safeReadLine(f)).length()) {
+    int p = s.toInt();
+    if (p >= 0 && p <= 39) rainSensorPin = p;
+  }
   if ((s = _safeReadLine(f)).length()) rainSensorInvert  = (s.toInt() == 1);
   if ((s = _safeReadLine(f)).length()) {
     int th = s.toInt();
@@ -4883,6 +5023,7 @@ void handleConfigure() {
                          oldTftBl   != tftBlPin);
 
   // Persist and re-apply runtime things
+  validatePinMap();
   saveConfig();
   initManualButtons();
   initGpioPinsForZones();
