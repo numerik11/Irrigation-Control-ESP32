@@ -289,8 +289,3 @@ Download Kincony PCF8574 library:
 
 ![PXL_20251222_121735203~2](https://github.com/user-attachments/assets/d0dc6ca8-cdca-4920-9006-1908e681a619)
 <img width="403" height="249" alt="image" src="https://github.com/user-attachments/assets/63f053da-0656-4761-a37d-9579fe1d955f" />
-
-
-
-
-](https://chatgpt.com/s/t_697f1dbc25b08191b79a3ae1194a1677)
