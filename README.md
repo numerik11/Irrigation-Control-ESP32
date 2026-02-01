@@ -40,8 +40,6 @@ Compact, low-pin-count display ideal for small enclosures.
 
 Lightweight option using common **16×2 or 20×4 LCDs**.
 
-> All variants share the **same firmware features and web UI**.
-
 ---
 
 ## 🌦 Weather Integration
