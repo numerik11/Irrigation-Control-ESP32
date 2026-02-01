@@ -1,8 +1,3 @@
-Here is your content **cleanly formatted as a proper GitHub `README.md`**, with correct Markdown, consistent headings, lists, tables, and code blocks.
-You can paste this **directly into GitHub** and it will render correctly.
-
----
-
 # 🌱 ESP32 1–16 Zone Smart Irrigation Controller
 
 A **feature-rich ESP32-based irrigation controller** designed to manage **1–16 solenoid zones**, with automatic **tank / mains water source selection**, **live weather integration**, and a modern **local web interface**:
