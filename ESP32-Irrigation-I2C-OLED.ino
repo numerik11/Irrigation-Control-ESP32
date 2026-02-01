@@ -16,6 +16,7 @@
 #include <DNSServer.h>
 #include <WiFiManager.h>
 #include <WiFi.h>
+#include <WiFiClientSecure.h>
 #include <WebServer.h>
 #include <HTTPClient.h>
 #include <Wire.h>
@@ -98,7 +99,9 @@ uint32_t manualScreenUntilMs = 0;
 const unsigned long MANUAL_BTN_DEBOUNCE_MS = 60;
 
 // ---------- Config / State ----------
-String apiKey, city; // OpenWeather (city = city ID)
+float  meteoLat = NAN;
+float  meteoLon = NAN;
+String meteoLocation; // Open-Meteo display label (optional)
 String cachedWeatherData;
 
 // Weather cache / metrics
@@ -210,8 +213,8 @@ static float rainHist[24] = {0};   // last 24 hourly buckets (mm/hour)
 static int   rainIdx = 0;          // points to most recent bucket
 static time_t lastRainHistHour = 0;
 static float last24hActualRain(); // forward
-float rain1hNow = 0.0f;  // mm from /weather last 1h
-float rain3hNow = 0.0f;  // mm from /weather last 3h
+float rain1hNow = 0.0f;  // mm from current precipitation (Open-Meteo)
+float rain3hNow = 0.0f;  // kept for compatibility
 
 // ---------- NEW: guard to avoid fetching while serving HTTP ----------
 volatile bool g_inHttp = false;
@@ -398,6 +401,102 @@ static String cleanName(String s) {
   s.trim(); s.replace("\r",""); s.replace("\n","");
   if (s.length() > 32) s = s.substring(0,32);
   return s;
+}
+
+static inline bool isValidLatLon(float lat, float lon) {
+  return isfinite(lat) && isfinite(lon) && lat >= -90.0f && lat <= 90.0f && lon >= -180.0f && lon <= 180.0f;
+}
+
+static bool parseLatLon(const String& s, float& lat, float& lon) {
+  String t = s; t.trim();
+  if (!t.length()) return false;
+  int sep = t.indexOf(',');
+  if (sep < 0) sep = t.indexOf(' ');
+  if (sep < 0) return false;
+  String a = t.substring(0, sep);
+  String b = t.substring(sep + 1);
+  a.trim(); b.trim();
+  if (!a.length() || !b.length()) return false;
+  float la = a.toFloat();
+  float lo = b.toFloat();
+  if (!isValidLatLon(la, lo)) return false;
+  lat = la; lon = lo;
+  return true;
+}
+
+static String meteoLocationLabel() {
+  if (meteoLocation.length()) return meteoLocation;
+  if (isValidLatLon(meteoLat, meteoLon)) {
+    return String(meteoLat, 4) + "," + String(meteoLon, 4);
+  }
+  return String("-");
+}
+
+static const char* meteoCodeToMain(int code) {
+  if (code == 0) return "Clear";
+  if (code >= 1 && code <= 3) return "Cloudy";
+  if (code == 45 || code == 48) return "Fog";
+  if (code >= 51 && code <= 57) return "Drizzle";
+  if (code >= 61 && code <= 67) return "Rain";
+  if (code >= 71 && code <= 77) return "Snow";
+  if (code >= 80 && code <= 82) return "Showers";
+  if (code >= 85 && code <= 86) return "Snow";
+  if (code >= 95) return "Thunder";
+  return "Unknown";
+}
+
+static const char* meteoCodeToDesc(int code) {
+  switch (code) {
+    case 0:  return "Clear sky";
+    case 1:  return "Mainly clear";
+    case 2:  return "Partly cloudy";
+    case 3:  return "Overcast";
+    case 45: return "Fog";
+    case 48: return "Rime fog";
+    case 51: return "Light drizzle";
+    case 53: return "Moderate drizzle";
+    case 55: return "Dense drizzle";
+    case 56: return "Freezing drizzle";
+    case 57: return "Dense freezing drizzle";
+    case 61: return "Slight rain";
+    case 63: return "Moderate rain";
+    case 65: return "Heavy rain";
+    case 66: return "Freezing rain";
+    case 67: return "Heavy freezing rain";
+    case 71: return "Slight snow";
+    case 73: return "Moderate snow";
+    case 75: return "Heavy snow";
+    case 77: return "Snow grains";
+    case 80: return "Rain showers";
+    case 81: return "Heavy showers";
+    case 82: return "Violent showers";
+    case 85: return "Snow showers";
+    case 86: return "Heavy snow showers";
+    case 95: return "Thunderstorm";
+    case 96: return "Thunderstorm hail";
+    case 99: return "Thunderstorm heavy hail";
+    default: return "Unknown";
+  }
+}
+
+static inline bool meteoCodeIsWet(int code) {
+  return (code >= 51 && code <= 67) || (code >= 71 && code <= 77) ||
+         (code >= 80 && code <= 86) || (code >= 95);
+}
+
+static time_t parseLocalIsoTime(const char* s) {
+  if (!s) return 0;
+  if (strlen(s) < 16) return 0;
+  struct tm tmv = {};
+  tmv.tm_year = atoi(s) - 1900;
+  tmv.tm_mon  = atoi(s + 5) - 1;
+  tmv.tm_mday = atoi(s + 8);
+  tmv.tm_hour = atoi(s + 11);
+  tmv.tm_min  = atoi(s + 14);
+  tmv.tm_sec  = 0;
+  tmv.tm_isdst = -1;
+  time_t t = mktime(&tmv);
+  return (t < 0) ? 0 : t;
 }
 
 inline bool isValidAdcPin(int pin) {
@@ -903,18 +1002,33 @@ void setup() {
     {
       DynamicJsonDocument js(2048);
       if (deserializeJson(js, cachedWeatherData) == DeserializationError::Ok) {
-        doc["temp"]       = js["main"]["temp"]       | 0.0f;
-        doc["feels_like"] = js["main"]["feels_like"] | 0.0f;
-        doc["humidity"]   = js["main"]["humidity"]   | 0;
-        doc["pressure"]   = js["main"]["pressure"]   | 0;
-        doc["wind"]       = js["wind"]["speed"]      | 0.0f;
-        doc["gustNow"]    = js["wind"]["gust"]       | 0.0f;
-        doc["condMain"]   = js["weather"][0]["main"]        | "";
-        doc["condDesc"]   = js["weather"][0]["description"] | "";
-        doc["icon"]       = js["weather"][0]["icon"]        | "";
-        doc["cityName"]   = js["name"]                      | "";
-        doc["owmTzSec"]   = js["timezone"]                  | 0;
+        JsonObject cur = js["current"].as<JsonObject>();
+        doc["temp"]       = cur["temperature_2m"]        | 0.0f;
+        doc["feels_like"] = cur["apparent_temperature"]  | 0.0f;
+        doc["humidity"]   = cur["relative_humidity_2m"]  | 0;
+        float pmsl = cur["pressure_msl"] | NAN;
+        float psfc = cur["surface_pressure"] | NAN;
+        float pval = isfinite(pmsl) ? pmsl : psfc;
+        doc["pressure"]   = isfinite(pval) ? pval : 0.0f;
+        doc["wind"]       = cur["wind_speed_10m"]        | 0.0f;
+        doc["gustNow"]    = cur["wind_gusts_10m"]        | 0.0f;
+        int code = cur["weather_code"] | -1;
+        doc["condMain"]   = (code >= 0) ? meteoCodeToMain(code) : "";
+        doc["condDesc"]   = (code >= 0) ? meteoCodeToDesc(code) : "";
+        doc["icon"]       = "";
+        doc["cityName"]   = meteoLocationLabel();
+        if (isValidLatLon(meteoLat, meteoLon)) {
+          doc["lat"] = meteoLat;
+          doc["lon"] = meteoLon;
+        }
+        doc["owmTzSec"]   = js["utc_offset_seconds"] | 0;
       }
+    }
+    // Always expose location for UI
+    doc["cityName"] = meteoLocationLabel();
+    if (isValidLatLon(meteoLat, meteoLon)) {
+      doc["lat"] = meteoLat;
+      doc["lon"] = meteoLon;
     }
 
     // Next Water (queue-first)
@@ -1327,11 +1441,18 @@ void tickManualButtons() {
 
 // ---------- Weather / Forecast ----------
 String fetchWeather() {
-  if (apiKey.length()<5 || city.length()<1) return "";
-  HTTPClient http; 
+  if (!isValidLatLon(meteoLat, meteoLon)) return "";
+  HTTPClient http;
+  WiFiClientSecure secure;
+  secure.setInsecure(); // minimal HTTPS setup; replace with CA cert for full validation
   http.setTimeout(2500); // NEW: shorter timeout
-  String url="http://api.openweathermap.org/data/2.5/weather?id="+city+"&appid="+apiKey+"&units=metric";
-  http.begin(client,url);
+  String url = "https://api.open-meteo.com/v1/forecast?latitude=" + String(meteoLat,6) +
+               "&longitude=" + String(meteoLon,6) +
+               "&current=temperature_2m,relative_humidity_2m,apparent_temperature,pressure_msl,"
+               "wind_speed_10m,wind_gusts_10m,precipitation,weather_code" +
+               "&temperature_unit=celsius&wind_speed_unit=ms&precipitation_unit=mm&pressure_unit=hPa"
+               "&timezone=auto";
+  http.begin(secure,url);
   int code=http.GET();
   if (code != 200) {
     http.end();
@@ -1343,16 +1464,21 @@ String fetchWeather() {
 }
 
 String fetchForecast(float lat, float lon) {
-  if (apiKey.length() < 5) return "";
-  HTTPClient http; 
+  if (!isValidLatLon(lat, lon)) return "";
+  HTTPClient http;
+  WiFiClientSecure secure;
+  secure.setInsecure(); // minimal HTTPS setup; replace with CA cert for full validation
   http.setTimeout(3000); // NEW: shorter timeout
 
-  String url = "http://api.openweathermap.org/data/2.5/onecall?lat=" + String(lat,6) +
-               "&lon=" + String(lon,6) +
-               "&appid=" + apiKey +
-               "&units=metric&exclude=minutely,alerts";
+  String url = "https://api.open-meteo.com/v1/forecast?latitude=" + String(lat,6) +
+               "&longitude=" + String(lon,6) +
+               "&hourly=precipitation,precipitation_probability,wind_gusts_10m" +
+               "&daily=temperature_2m_min,temperature_2m_max,sunrise,sunset" +
+               "&forecast_hours=24&forecast_days=2" +
+               "&temperature_unit=celsius&wind_speed_unit=ms&precipitation_unit=mm&pressure_unit=hPa"
+               "&timezone=auto";
 
-  http.begin(client, url);
+  http.begin(secure, url);
   int code = http.GET();
   if (code != 200) {
     http.end();
@@ -1380,7 +1506,7 @@ static void tickActualRainHistory() {
       v = 0.0f;
     }
 
-    // Optional: clamp crazy hourly spikes from OWM
+    // Optional: clamp crazy hourly spikes from provider
     const float MAX_HOURLY_MM = 20.0f;  // tweak to taste: 10, 15, 20, etc.
     if (v > MAX_HOURLY_MM) {
       v = MAX_HOURLY_MM;
@@ -1418,7 +1544,7 @@ void updateCachedWeather() {
 
   unsigned long nowms = millis();
   bool needCur = (cachedWeatherData == "" || (nowms - lastWeatherUpdate >= weatherUpdateInterval));
-  bool haveCoord = false; float lat = NAN, lon = NAN;
+  bool haveCoord = isValidLatLon(meteoLat, meteoLon);
 
   if (needCur) {
     String fresh = fetchWeather();
@@ -1428,35 +1554,24 @@ void updateCachedWeather() {
     }
   }
 
-  // Extract coordinates and 1h rain
+  // Extract 1h rain from current conditions
   {
     DynamicJsonDocument js(1024);
     if (deserializeJson(js, cachedWeatherData) == DeserializationError::Ok) {
-      if (js["coord"]["lat"].is<float>() && js["coord"]["lon"].is<float>()) {
-        lat = js["coord"]["lat"].as<float>();
-        lon = js["coord"]["lon"].as<float>();
-        haveCoord = true;
-      }
-
-      // 1h only (no 3h fallback)
-      float r1 = 0.0f;
-      JsonVariant rv = js["rain"];
-      if (!rv.isNull()) {
-        if (rv.is<float>() || rv.is<double>() || rv.is<int>()) {
-          r1 = rv.as<float>(); // rare form: rain: <number>
-        } else if (rv["1h"].is<float>() || rv["1h"].is<double>() || rv["1h"].is<int>()) {
-          r1 = rv["1h"].as<float>(); // common form: rain: { "1h": x }
-        }
-      }
+      JsonObject cur = js["current"].as<JsonObject>();
+      float r1 = cur["precipitation"] | 0.0f;
+      if (!isfinite(r1) || r1 < 0.0f) r1 = 0.0f;
       rain1hNow = r1;
+      rain3hNow = 0.0f;
     } else {
       rain1hNow = 0.0f;
+      rain3hNow = 0.0f;
     }
   }
 
   // ---- Forecast fetch / parse ----
   if (haveCoord && (cachedForecastData == "" || (nowms - lastForecastUpdate >= forecastUpdateInterval))) {
-    String freshFc = fetchForecast(lat, lon);
+    String freshFc = fetchForecast(meteoLat, meteoLon);
     if (freshFc.length() > 0) {
       cachedForecastData = freshFc;
       lastForecastUpdate = nowms;
@@ -1469,58 +1584,42 @@ void updateCachedWeather() {
       todaySunrise   = 0;   
       todaySunset    = 0;
 
-      DynamicJsonDocument fc(14 * 1024);
+      DynamicJsonDocument fc(12 * 1024);
       if (deserializeJson(fc, cachedForecastData) == DeserializationError::Ok) {
-      if (fc["daily"].is<JsonArray>() && fc["daily"].size() > 0) {
-        JsonObject d0 = fc["daily"][0];
-        todaySunrise = (time_t)(d0["sunrise"] | 0);
-        todaySunset  = (time_t)(d0["sunset"]  | 0);
-      }
-      auto read1h = [](JsonVariant v) -> float {
-        if (v.isNull()) return 0.0f;
-        if (v.is<float>() || v.is<double>() || v.is<int>()) return v.as<float>();
-        JsonVariant one = v["1h"];
-        return one.isNull() ? 0.0f : one.as<float>();
-      };
-      if (fc["hourly"].is<JsonArray>()) {
-        JsonArray hr = fc["hourly"].as<JsonArray>();
-        int hrs = hr.size();
+        JsonObject daily = fc["daily"].as<JsonObject>();
+        JsonArray sunr = daily["sunrise"].as<JsonArray>();
+        JsonArray suns = daily["sunset"].as<JsonArray>();
+        JsonArray tmin = daily["temperature_2m_min"].as<JsonArray>();
+        JsonArray tmax = daily["temperature_2m_max"].as<JsonArray>();
+
+        if (sunr.size() > 0) todaySunrise = parseLocalIsoTime(sunr[0] | "");
+        if (suns.size() > 0) todaySunset  = parseLocalIsoTime(suns[0] | "");
+        if (tmin.size() > 0) todayMin_C   = tmin[0] | todayMin_C;
+        if (tmax.size() > 0) todayMax_C   = tmax[0] | todayMax_C;
+
+        JsonObject hourly = fc["hourly"].as<JsonObject>();
+        JsonArray prec = hourly["precipitation"].as<JsonArray>();
+        JsonArray pop  = hourly["precipitation_probability"].as<JsonArray>();
+        JsonArray gust = hourly["wind_gusts_10m"].as<JsonArray>();
+
+        int hrs = max((int)prec.size(), max((int)pop.size(), (int)gust.size()));
         int L24 = min(24, hrs);
-        int L12 = min(12, hrs);
+        int L12 = min(12, L24);
         for (int i = 0; i < L24; i++) {
-          JsonObject h = hr[i];
-          float r = 0.0f;
-          r += read1h(h["rain"]);
-          r += read1h(h["snow"]);
+          float r = (prec.size() > i) ? prec[i].as<float>() : 0.0f;
+          if (!isfinite(r) || r < 0.0f) r = 0.0f;
           if (i < L12) {
             rainNext12h_mm += r;
-            int pop = (int)roundf(100.0f * (h["pop"] | 0.0f));
-            if (pop > popNext12h_pct) popNext12h_pct = pop;
+            int p = (pop.size() > i) ? pop[i].as<int>() : 0;
+            if (p > popNext12h_pct) popNext12h_pct = p;
           }
-            rainNext24h_mm += r;
-            if (nextRainIn_h < 0) {
-              float popf = h["pop"] | 0.0f;
-              if (r > 0.01f || popf >= 0.5f) nextRainIn_h = i;
-            }
-          float g = h["wind_gust"] | 0.0f;
+          rainNext24h_mm += r;
+          if (nextRainIn_h < 0) {
+            int p = (pop.size() > i) ? pop[i].as<int>() : 0;
+            if (r > 0.1f || p >= 50) nextRainIn_h = i;
+          }
+          float g = (gust.size() > i) ? gust[i].as<float>() : 0.0f;
           if (g > maxGust24h_ms) maxGust24h_ms = g;
-        }
-      }
-        if (rainNext24h_mm <= 0.0f && fc["daily"].is<JsonArray>() && fc["daily"].size() > 0) {
-          JsonObject d0 = fc["daily"][0];
-          float dailyTotal = 0.0f;
-          if (!d0["rain"].isNull()) {
-            if (d0["rain"].is<float>() || d0["rain"].is<double>() || d0["rain"].is<int>())
-              dailyTotal += d0["rain"].as<float>();
-          }
-          if (!d0["snow"].isNull()) {
-            if (d0["snow"].is<float>() || d0["snow"].is<double>() || d0["snow"].is<int>())
-              dailyTotal += d0["snow"].as<float>();
-          }
-          if (dailyTotal > 0.0f) {
-            rainNext24h_mm = dailyTotal;
-            if (rainNext12h_mm <= 0.0f) rainNext12h_mm = dailyTotal * 0.5f;
-          }
         }
       }
       if (isnan(rainNext12h_mm) || rainNext12h_mm < 0) rainNext12h_mm = 0.0f;
@@ -1529,14 +1628,10 @@ void updateCachedWeather() {
     }
   }
 
-  // Fallback sunrise/sunset & min/max from current weather
+  // Fallback min/max from current weather
   DynamicJsonDocument cur(2048);
   if (deserializeJson(cur, cachedWeatherData) == DeserializationError::Ok) {
-    time_t sr = (time_t)(cur["sys"]["sunrise"] | 0);
-    time_t ss = (time_t)(cur["sys"]["sunset"]  | 0);
-    if (sr > 0) todaySunrise = sr;
-    if (ss > 0) todaySunset  = ss;
-    float tcur = cur["main"]["temp"] | NAN;
+    float tcur = cur["current"]["temperature_2m"] | NAN;
     if (isfinite(tcur)) {
       if (!isfinite(todayMin_C) || tcur < todayMin_C) todayMin_C = tcur;
       if (!isfinite(todayMax_C) || tcur > todayMax_C) todayMax_C = tcur;
@@ -1576,37 +1671,33 @@ bool checkWindRain() {
   }
   lastCheckMs = nowMs;
 
-  bool newWeatherRainActual = false;   // raw "is it raining now" from OWM
+  bool newWeatherRainActual = false;   // raw "is it raining now" from Open-Meteo
   bool newSensorRainActual  = false;   // raw sensor state
   bool newWindActual        = false;   // raw wind above threshold
 
-  // --- 1) Parse cached weather JSON (OpenWeather) ---
+  // --- 1) Parse cached weather JSON (Open-Meteo) ---
   DynamicJsonDocument js(1024);
   DeserializationError err = deserializeJson(js, cachedWeatherData);
 
   if (!err) {
-    // ----- RAIN BY WEATHER (instant, use 1h / condition code) -----
-    float rain1hRaw = js["rain"]["1h"] | 0.0f;
+    JsonObject cur = js["current"].as<JsonObject>();
 
-    float rain1hLogic = rain1hRaw;
-    if (rain1hLogic < 0.0f) rain1hLogic = 0.0f;
-    const float MAX_RAIN1H_FOR_LOGIC = 20.0f;  // mm, tweak if needed
-    if (rain1hLogic > MAX_RAIN1H_FOR_LOGIC) {
-      rain1hLogic = MAX_RAIN1H_FOR_LOGIC;
-    }
-
-    if (rain1hLogic > 0.0f) {
+    // ----- RAIN BY WEATHER (instant, use precipitation / weather_code) -----
+    float rainNow = cur["precipitation"] | 0.0f;
+    if (!isfinite(rainNow) || rainNow < 0.0f) rainNow = 0.0f;
+    const float MAX_RAIN1H_FOR_LOGIC = 20.0f;  // mm
+    if (rainNow > MAX_RAIN1H_FOR_LOGIC) rainNow = MAX_RAIN1H_FOR_LOGIC;
+    if (rainNow > 0.0f) {
       newWeatherRainActual = true;
     } else {
-      // Fallback: weather condition code (2xx/3xx/5xx = rain-ish)
-      int wid = js["weather"][0]["id"] | 0;
-      if (wid >= 200 && wid < 600) {
+      int wcode = cur["weather_code"] | -1;
+      if (wcode >= 0 && meteoCodeIsWet(wcode)) {
         newWeatherRainActual = true;
       }
     }
 
     // ----- WIND DELAY (raw) -----
-    float windSpeed = js["wind"]["speed"] | 0.0f;  // m/s
+    float windSpeed = cur["wind_speed_10m"] | 0.0f;  // m/s
     if (windSpeedThreshold > 0.0f) {
       newWindActual = (windSpeed >= windSpeedThreshold);
     } else {
@@ -1699,13 +1790,14 @@ bool checkWindRain() {
 void logEvent(int zone, const char* eventType, const char* source, bool rainDelayed) {
   updateCachedWeather(); // safe early-out if g_inHttp==true, keeps details recent enough
   DynamicJsonDocument js(512);
-  float temp=NAN, wind=NAN; int hum=0; String cond="?", cname="-";
+  float temp=NAN, wind=NAN; int hum=0; String cond="?", cname=meteoLocationLabel();
   if (deserializeJson(js,cachedWeatherData)==DeserializationError::Ok) {
-    temp = js["main"]["temp"].as<float>();
-    hum  = js["main"]["humidity"].as<int>();
-    wind = js["wind"]["speed"].as<float>();
-    cond = js["weather"][0]["main"].as<const char*>();
-    cname= js["name"].as<const char*>();
+    JsonObject cur = js["current"].as<JsonObject>();
+    temp = cur["temperature_2m"] | NAN;
+    hum  = cur["relative_humidity_2m"] | 0;
+    wind = cur["wind_speed_10m"] | NAN;
+    int code = cur["weather_code"] | -1;
+    cond = (code >= 0) ? meteoCodeToMain(code) : "?";
   }
 
   File f = LittleFS.open("/events.csv","a");
@@ -1763,8 +1855,9 @@ void RainScreen(){
 void HomeScreen() {
   DynamicJsonDocument js(1024); (void)deserializeJson(js,cachedWeatherData);
 
-  float temp = js["main"]["temp"].as<float>();
-  int   hum  = js["main"]["humidity"].as<int>();
+  JsonObject cur = js["current"].as<JsonObject>();
+  float temp = cur["temperature_2m"] | NAN;
+  int   hum  = cur["relative_humidity_2m"] | -1;
   int   pct  = tankPercent();
 
   time_t now = time(nullptr);
@@ -2112,15 +2205,17 @@ void handleRoot() {
   // Safe reads
   float temp = NAN, hum = NAN, ws = NAN, feels = NAN;
   if (!werr) {
-    if (js["main"]["temp"].is<float>())        temp  = js["main"]["temp"].as<float>();
-    if (js["main"]["feels_like"].is<float>())  feels = js["main"]["feels_like"].as<float>();
-    if (js["main"]["humidity"].is<float>())    hum   = js["main"]["humidity"].as<float>();
-    if (js["wind"]["speed"].is<float>())       ws    = js["wind"]["speed"].as<float>();
+    JsonObject cur = js["current"].as<JsonObject>();
+    if (cur["temperature_2m"].is<float>())       temp  = cur["temperature_2m"].as<float>();
+    if (cur["apparent_temperature"].is<float>()) feels = cur["apparent_temperature"].as<float>();
+    if (cur["relative_humidity_2m"].is<float>()) hum   = cur["relative_humidity_2m"].as<float>();
+    if (cur["wind_speed_10m"].is<float>())       ws    = cur["wind_speed_10m"].as<float>();
   }
 
-  String cond = werr ? "-" : String(js["weather"][0]["main"].as<const char*>());
+  int wcode = werr ? -1 : (js["current"]["weather_code"] | -1);
+  String cond = (wcode >= 0) ? String(meteoCodeToMain(wcode)) : String("-");
   if (cond == "") cond = "-";
-  String cityName = werr ? "-" : String(js["name"].as<const char*>());
+  String cityName = meteoLocationLabel();
   if (cityName == "") cityName = "-";
 
   const int    tankPct   = tankPercent();
@@ -2280,9 +2375,9 @@ void handleRoot() {
   // --- Summary cards ---
   html += F("<div class='wrap'><div class='glass section'><div class='grid summary-grid'>");
 
-  // NEW location card with OpenWeatherMap link
+  // Location card with Open-Meteo link
   html += F("<div class='card'><h3>Location</h3>"
-            "<a class='chip' id='owmLink' href='#' target='_blank' rel='noopener'>"
+            "<a class='chip' id='meteoLink' href='https://open-meteo.com/' target='_blank' rel='noopener'>"
             "<b id='cityName'>");
 html += cityName;   // initial label; JS will overwrite from /status
 html += F("</b></a></div>");
@@ -2651,11 +2746,16 @@ html += F("</b></a></div>");
   html += F("const src=document.getElementById('srcChip'); if(src) src.textContent=st.sourceMode||'';");
   html += F("const up=document.getElementById('upChip'); if(up) up.textContent=fmtClock12(st.deviceEpoch, st.utcOffsetMin);");
   html += F("const rssi=document.getElementById('rssiChip'); if(rssi) rssi.textContent=(st.rssi)+' dBm';");
-  // NEW: Location chip + OpenWeatherMap link
-  html += F("const cityEl=document.getElementById('cityName'); const cityLink=document.getElementById('owmLink');");
+  // Location chip + Open-Meteo link
+  html += F("const cityEl=document.getElementById('cityName'); const cityLink=document.getElementById('meteoLink');");
   html += F("if(typeof st.cityName==='string' && st.cityName.length){");
   html += F("  if(cityEl) cityEl.textContent=st.cityName;");
-  html += F("  if(cityLink) cityLink.href='https://openweathermap.org/find?q='+encodeURIComponent(st.cityName);");
+  html += F("}");
+  html += F("if(cityLink){");
+  html += F("  const lat=Number.isFinite(st.lat)?st.lat:null;");
+  html += F("  const lon=Number.isFinite(st.lon)?st.lon:null;");
+  html += F("  if(lat!==null && lon!==null){ cityLink.href='https://open-meteo.com/en/docs?latitude='+lat+'&longitude='+lon; }");
+  html += F("  else { cityLink.href='https://open-meteo.com/'; }");
   html += F("}");
 
 
@@ -2744,6 +2844,8 @@ void handleSetupPage() {
   HttpScope _scope;
   loadConfig();
   String html; html.reserve(26000);
+  String latStr = isfinite(meteoLat) ? String(meteoLat, 6) : String("");
+  String lonStr = isfinite(meteoLon) ? String(meteoLon, 6) : String("");
 
   html += F("<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>");
   html += F("<title>Setup - ESP32 Irrigation</title>");
@@ -2823,9 +2925,11 @@ void handleSetupPage() {
   html += F("<div class='wrap'><h1>Setup</h1><form action='/configure' method='POST'>");
 
   // Weather
-  html += F("<div class='card narrow'><h3>Weather</h3>");
-  html += F("<div class='row'><label>API Key</label><input class='in-wide' type='text' name='apiKey' value='"); html += apiKey; html += F("'></div>");
-  html += F("<div class='row'><label>City ID</label><input class='in-med' type='text' name='city' value='"); html += city; html += F("'><small>OpenWeatherMap city id</small></div>");
+  html += F("<div class='card narrow'><h3>Weather (Open-Meteo)</h3>");
+  html += F("<div class='row'><label>Location Name</label><input class='in-wide' type='text' name='meteoLocation' value='"); html += meteoLocation; html += F("'><small>Optional label for UI/logs</small></div>");
+  html += F("<div class='row'><label>Latitude</label><input class='in-med' type='text' name='meteoLat' value='"); html += latStr; html += F("'><small>e.g. -34.9285</small></div>");
+  html += F("<div class='row'><label>Longitude</label><input class='in-med' type='text' name='meteoLon' value='"); html += lonStr; html += F("'><small>e.g. 138.6007</small></div>");
+  html += F("<div class='row helptext'><label></label><small>No API key required. Enter your coordinates for Open-Meteo.</small></div>");
   html += F("</div>");
 
   // Zones
@@ -2885,8 +2989,8 @@ void handleSetupPage() {
 
   // Physical rain & forecast
   html += F("<div class='card narrow'><h3>Rain Sources</h3>");
-  html += F("<div class='row switchline'><label>Disable OWM Rain</label><input type='checkbox' name='rainForecastDisabled' ");
-  html += (!rainDelayFromForecastEnabled ? "checked" : ""); html += F("><small>Checked = ignore OpenWeatherMap rain</small></div>");
+  html += F("<div class='row switchline'><label>Disable Open-Meteo Rain</label><input type='checkbox' name='rainForecastDisabled' ");
+  html += (!rainDelayFromForecastEnabled ? "checked" : ""); html += F("><small>Checked = ignore Open-Meteo rain</small></div>");
   html += F("<div class='row switchline'><label>Enable Rain Sensor</label><input type='checkbox' name='rainSensorEnabled' "); html += (rainSensorEnabled?"checked":""); html += F("></div>");
   html += F("<div class='row'><label>Rain Sensor GPIO</label><input class='in-xs' type='number' min='0' max='39' name='rainSensorPin' value='"); html += String(rainSensorPin); html += F("'><small>e.g. 27</small></div>");
   html += F("<div class='row switchline'><label>Invert Sensor</label><input type='checkbox' name='rainSensorInvert' "); html += (rainSensorInvert?"checked":""); html += F("><small>Use if board is NO</small></div>");
@@ -3356,10 +3460,19 @@ void loadConfig() {
   if (!f) return;
 
   String s;
+  meteoLat = NAN;
+  meteoLon = NAN;
+  meteoLocation = "";
 
   // Legacy & core
-  if ((s = _safeReadLine(f)).length()) apiKey = s;
-  if ((s = _safeReadLine(f)).length()) city   = s;
+  if ((s = _safeReadLine(f)).length()) {
+    float v = s.toFloat();
+    if (v >= -90.0f && v <= 90.0f) meteoLat = v;
+  }
+  if ((s = _safeReadLine(f)).length()) {
+    float v = s.toFloat();
+    if (v >= -180.0f && v <= 180.0f) meteoLon = v;
+  }
   if ((s = _safeReadLine(f)).length()) tzOffsetHours = s.toFloat(); // legacy
 
   if ((s = _safeReadLine(f)).length()) rainDelayEnabled     = (s.toInt() == 1);
@@ -3462,6 +3575,9 @@ void loadConfig() {
   }
   }
 
+  // NEW: Open-Meteo location label (optional trailing line)
+  if (f.available()) { if ((s = _safeReadLine(f)).length()) meteoLocation = cleanName(s); }
+
   f.close();
 
   // Derive hours from minutes (for UI & cooldown logic)
@@ -3476,9 +3592,14 @@ void saveConfig() {
   if (zonesCount < 1) zonesCount = 1;
   if (zonesCount > MAX_ZONES) zonesCount = MAX_ZONES;
 
-  // Core / legacy order
-  f.println(apiKey);
-  f.println(city);
+  // Core / legacy order (now: Open-Meteo coords)
+  if (isValidLatLon(meteoLat, meteoLon)) {
+    f.println(String(meteoLat, 6));
+    f.println(String(meteoLon, 6));
+  } else {
+    f.println("");
+    f.println("");
+  }
   f.println(String(tzOffsetHours, 3));
 
   f.println(rainDelayEnabled ? 1 : 0);
@@ -3540,6 +3661,8 @@ void saveConfig() {
   f.println(gpioActiveLow ? 1 : 0);
   // NEW: tank level sensor pin (ADC)
   f.println(tankLevelPin);
+  // NEW: Open-Meteo location label
+  f.println(cleanName(meteoLocation));
 
   f.close();
 }
@@ -3603,8 +3726,9 @@ void handleConfigure() {
   HttpScope _scope;
 
     // NEW: snapshot current values before applying POST changes
-  String oldApiKey = apiKey;
-  String oldCity   = city;
+  float  oldLat    = meteoLat;
+  float  oldLon    = meteoLon;
+  String oldLoc    = meteoLocation;
   int oldZonePins[MAX_ZONES]; for (int i=0;i<MAX_ZONES;i++) oldZonePins[i] = zonePins[i];
   int oldMainsPin        = mainsPin;
   int oldTankPin         = tankPin;
@@ -3614,9 +3738,36 @@ void handleConfigure() {
   int oldRainSensorPin   = rainSensorPin;
   bool pinsChanged       = false;
 
-  // Weather
-  if (server.hasArg("apiKey")) apiKey = server.arg("apiKey");
-  if (server.hasArg("city"))   city   = server.arg("city");
+  // Weather (Open-Meteo)
+  if (server.hasArg("meteoLocation")) {
+    meteoLocation = cleanName(server.arg("meteoLocation"));
+  }
+  if (server.hasArg("meteoLat")) {
+    String s = server.arg("meteoLat"); s.trim();
+    if (!s.length()) {
+      meteoLat = NAN;
+    } else {
+      float v = s.toFloat();
+      if (v >= -90.0f && v <= 90.0f) meteoLat = v;
+    }
+  }
+  if (server.hasArg("meteoLon")) {
+    String s = server.arg("meteoLon"); s.trim();
+    if (!s.length()) {
+      meteoLon = NAN;
+    } else {
+      float v = s.toFloat();
+      if (v >= -180.0f && v <= 180.0f) meteoLon = v;
+    }
+  }
+  // Fallback: allow "lat,lon" in the latitude field
+  if (!isValidLatLon(meteoLat, meteoLon) && server.hasArg("meteoLat")) {
+    float la = NAN, lo = NAN;
+    if (parseLatLon(server.arg("meteoLat"), la, lo)) {
+      meteoLat = la;
+      meteoLon = lo;
+    }
+  }
 
   // Zones mode (1..MAX_ZONES, 4 keeps tank/mains behaviour)
   if (server.hasArg("zonesMode")) {
@@ -3788,8 +3939,13 @@ void handleConfigure() {
   saveConfig();
   initManualButtons();
     
-    // --- NEW: if API key or City ID changed, force a weather refresh ---
-  if (apiKey != oldApiKey || city != oldCity) {
+  // --- NEW: if location/coords changed, force a weather refresh ---
+  auto coordChanged = [](float a, float b) -> bool {
+    if (!isfinite(a) && !isfinite(b)) return false;
+    if (!isfinite(a) || !isfinite(b)) return true;
+    return fabsf(a - b) > 0.0001f;
+  };
+  if (coordChanged(oldLat, meteoLat) || coordChanged(oldLon, meteoLon) || (oldLoc != meteoLocation)) {
     // Clear current / forecast caches and timers
     cachedWeatherData   = "";
     cachedForecastData  = "";
