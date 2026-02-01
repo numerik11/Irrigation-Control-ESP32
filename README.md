@@ -175,7 +175,6 @@ Manual zone activation **respects the same safety rules**.
 
   * ~10 W per solenoid
   * 12 V DC or 12/24 V AC
-* **OpenWeatherMap API key**
 
 ---
 
