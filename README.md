@@ -56,7 +56,7 @@ Lightweight option using common **16×2 or 20×4 LCDs**.
 * Temperature
 * Humidity
 * Wind speed
-* Conditions (Rain / Drizzle / Thunderstorm)
+* Conditions (Rain / Clear / Thunderstorm ect.)
 
 ### Smart Delays
 
