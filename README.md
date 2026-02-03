@@ -220,6 +220,7 @@ Install **ESP32 by Espressif Systems**
 Select board:
 
 * **ESP32 Dev Module** (KC868-A6 compatible)
+* **ESP32S3 Dev Module** 
 
 Set partition scheme:
 
