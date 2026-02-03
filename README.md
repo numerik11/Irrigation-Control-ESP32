@@ -287,7 +287,8 @@ Download Kincony PCF8574 library:
 
 <img width="791" height="754" alt="Screenshot 2025-07-25 233726" src="https://github.com/user-attachments/assets/f601fb06-e70c-4fc6-a7f3-5fdf410b4e73" />
 
--Wemos R32 w/ 6 Relay module 24vac
+-Esp32 w/TFT 8 Relay Module 
 
-![PXL_20251222_121735203~2](https://github.com/user-attachments/assets/d0dc6ca8-cdca-4920-9006-1908e681a619)
+<img width="710" height="439" alt="image" src="https://github.com/user-attachments/assets/0d7cca76-588d-4349-9476-21be9d54033e" />
+
 <img width="403" height="249" alt="image" src="https://github.com/user-attachments/assets/63f053da-0656-4761-a37d-9579fe1d955f" />
