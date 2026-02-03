@@ -13,7 +13,6 @@
 #include <Arduino.h>
 #include <ArduinoJson.h>
 #include <ArduinoOTA.h>
-#include <DNSServer.h>
 #include <WiFiManager.h>
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -127,7 +126,6 @@ static void fmtMMSS(char* out, size_t n, unsigned long sec){
 
 WiFiManager wifiManager;
 WebServer server(80);
-WiFiClient client;
 
 // PCF mapping
 const uint8_t ALL_P = 6;
@@ -168,7 +166,12 @@ const unsigned long MANUAL_BTN_DEBOUNCE_MS = 60;
 float  meteoLat = NAN;
 float  meteoLon = NAN;
 String meteoLocation; // Open-Meteo display label (optional)
+String meteoModel = "gfs"; // Open-Meteo model endpoint (e.g., gfs, icon, ecmwf)
 String cachedWeatherData;
+String lastWeatherError;
+String lastForecastError;
+int    lastWeatherHttpCode  = 0;
+int    lastForecastHttpCode = 0;
 
 // Weather cache / metrics
 unsigned long lastWeatherUpdate = 0;
@@ -262,10 +265,6 @@ const uint8_t expanderAddrs[] = { 0x22, 0x24 };
 const uint8_t I2C_HEALTH_DEBOUNCE = 10;
 uint8_t i2cFailCount = 0;
 
-// Debug
-bool dbgForceRain = false;
-bool dbgForceWind = false;
-
 // Timing
 static const uint32_t LOOP_SLEEP_MS    = 20;
 static const uint32_t I2C_CHECK_MS     = 1000;
@@ -320,6 +319,8 @@ void handleLogPage();
 void handleClearEvents();
 void handleTankCalibration();
 String fetchWeather();
+String fetchWeatherHourlyForCurrent(const String& model, float lat, float lon, bool useForecastEndpoint);
+bool buildCurrentFromHourlyPayload(const String& hourlyPayload, String& outPayload);
 String fetchForecast(float lat, float lon);
 bool checkWindRain();
 void checkI2CHealth();
@@ -463,9 +464,6 @@ void mqttPublishStatus(){
   _mqtt.publish( (mqttBase + "/status").c_str(), out.c_str(), true);
 }
 
-// ---------- Helpers ----------
-static inline int i_min(int a, int b) { return (a < b) ? a : b; }
-
 static inline bool isPausedNow() {
   time_t now = time(nullptr);
   return systemPaused && (pauseUntilEpoch == 0 || now < (time_t)pauseUntilEpoch);
@@ -526,6 +524,58 @@ static String cleanName(String s) {
   s.trim(); s.replace("\r",""); s.replace("\n","");
   if (s.length() > 32) s = s.substring(0,32);
   return s;
+}
+
+static String cleanMeteoModel(String s) {
+  s.trim();
+  s.toLowerCase();
+  String out; out.reserve(s.length());
+  for (size_t i = 0; i < s.length(); ++i) {
+    char c = s[i];
+    if ((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '_' || c == '-') {
+      out += c;
+    }
+  }
+  if (!out.length()) out = "gfs";
+  return out;
+}
+
+static bool isKnownMeteoModel(const String& s) {
+  return (s == "gfs" || s == "icon" || s == "ecmwf" || s == "meteofrance" ||
+          s == "jma" || s == "cma" || s == "gem" || s == "icon_seamless" ||
+          s == "icon_global" || s == "icon_eu" || s == "bom" ||
+          s == "bom_access_global" || s == "ukmo_seamless");
+}
+
+static bool isMeteoErrorPayload(const String& payload) {
+  if (payload.indexOf("\"error\"") == -1) return false;
+  DynamicJsonDocument js(512);
+  if (deserializeJson(js, payload) != DeserializationError::Ok) return false;
+  return (js["error"] | false) == true;
+}
+
+static String meteoErrorReason(const String& payload) {
+  DynamicJsonDocument js(512);
+  if (deserializeJson(js, payload) != DeserializationError::Ok) return "";
+  if ((js["error"] | false) != true) return "";
+  return js["reason"] | "";
+}
+
+static String meteoBaseUrl(const String& model, bool useForecastEndpoint) {
+  if (useForecastEndpoint) return "https://api.open-meteo.com/v1/forecast";
+  return "https://api.open-meteo.com/v1/" + model;
+}
+
+static String httpGetMeteo(const String& url, int& code, uint16_t timeoutMs) {
+  HTTPClient http;
+  WiFiClientSecure secure;
+  secure.setInsecure();
+  http.setTimeout(timeoutMs);
+  http.begin(secure, url);
+  code = http.GET();
+  String payload = (code > 0) ? http.getString() : "";
+  http.end();
+  return payload;
 }
 
 static inline bool isValidLatLon(float lat, float lon) {
@@ -1046,28 +1096,6 @@ static void tickAutoBacklight(){
     tftBacklight(autoOn);
   }
 }
-static void tftBegin(){
-  // Pins are loaded from config (Setup -> SPI (TFT)).
-
-  tft.init(TFT_W, TFT_H);
-  tft.setTextWrap(false);
-  tft.fillScreen(ST77XX_BLACK);
-  tft.setTextColor(ST77XX_WHITE, ST77XX_BLACK);
-
-  tftBacklight(true);
-}
-
-static void tftHeader(const char* title){
-  // simple header bar
-  tft.fillRect(0, 0, TFT_W, 28, ST77XX_BLACK);
-  tft.drawFastHLine(0, 28, TFT_W, ST77XX_WHITE);
-  tft.setCursor(8, 8);
-  tft.setTextSize(2);
-  tft.print(title);
-  tft.setTextSize(1);
-}
-
-
 // ---------- Setup ----------
 void setup() {
   Serial.begin(115200);
@@ -1315,6 +1343,10 @@ void setup() {
     doc["tzAbbrev"]     = (ltm.tm_isdst>0) ? "DST" : "STD";
     doc["sunriseLocal"] = hhmm((time_t)todaySunrise);
     doc["sunsetLocal"]  = hhmm((time_t)todaySunset);
+    doc["weatherHttp"]  = lastWeatherHttpCode;
+    doc["forecastHttp"] = lastForecastHttpCode;
+    if (lastWeatherError.length())  doc["weatherError"]  = lastWeatherError;
+    if (lastForecastError.length()) doc["forecastError"] = lastForecastError;
 
     // Feature gates
     doc["masterOn"]          = systemMasterEnabled;
@@ -1352,7 +1384,10 @@ void setup() {
         doc["temp"]       = cur["temperature_2m"]        | 0.0f;
         doc["feels_like"] = cur["apparent_temperature"]  | 0.0f;
         doc["humidity"]   = cur["relative_humidity_2m"]  | 0;
-        doc["pressure"]   = cur["pressure_msl"]          | 0;
+        float pmsl = cur["pressure_msl"] | NAN;
+        float psfc = cur["surface_pressure"] | NAN;
+        float pval = isfinite(pmsl) ? pmsl : psfc;
+        doc["pressure"]   = isfinite(pval) ? pval : 0.0f;
         doc["wind"]       = cur["wind_speed_10m"]        | 0.0f;
         doc["gustNow"]    = cur["wind_gusts_10m"]        | 0.0f;
         int code = cur["weather_code"] | -1;
@@ -1360,6 +1395,7 @@ void setup() {
         doc["condDesc"]   = (code >= 0) ? meteoCodeToDesc(code) : "";
         doc["icon"]       = "";
         doc["cityName"]   = meteoLocationLabel();
+        doc["meteoModel"] = meteoModel;
         if (isValidLatLon(meteoLat, meteoLon)) {
           doc["lat"] = meteoLat;
           doc["lon"] = meteoLon;
@@ -1369,6 +1405,7 @@ void setup() {
     }
     // Always expose location for UI
     doc["cityName"] = meteoLocationLabel();
+    doc["meteoModel"] = meteoModel;
     if (isValidLatLon(meteoLat, meteoLon)) {
       doc["lat"] = meteoLat;
       doc["lon"] = meteoLon;
@@ -1585,7 +1622,6 @@ void setup() {
     HttpScope _scope;
     for (int z=0; z<(int)zonesCount; ++z) pendingStart[z] = false;
     for (int z=0; z<(int)zonesCount; ++z) if (zoneActive[z]) turnOffZone(z);
-    dbgForceRain = false; dbgForceWind = false;
     for (int z=0; z<(int)zonesCount; ++z) lastCheckedMinute[z] = -1;
     server.send(200,"text/plain","OK");
   });
@@ -1919,51 +1955,147 @@ void tickManualButtons() {
 // ---------- Weather / Forecast ----------
 String fetchWeather() {
   if (!isValidLatLon(meteoLat, meteoLon)) return "";
-  HTTPClient http;
-  WiFiClientSecure secure;
-  secure.setInsecure(); // minimal HTTPS setup; replace with CA cert for full validation
-  http.setTimeout(2500); // NEW: shorter timeout
-  String url = "https://api.open-meteo.com/v1/forecast?latitude=" + String(meteoLat,6) +
-               "&longitude=" + String(meteoLon,6) +
-               "&current=temperature_2m,relative_humidity_2m,apparent_temperature,pressure_msl,"
-               "wind_speed_10m,wind_gusts_10m,precipitation,weather_code" +
-               "&temperature_unit=celsius&wind_speed_unit=ms&precipitation_unit=mm&pressure_unit=hPa"
-               "&timezone=auto";
-  http.begin(secure,url);
-  int code=http.GET();
-  if (code != 200) {
-    http.end();
-    return "";
+  String model = cleanMeteoModel(meteoModel);
+  lastWeatherError = "";
+  lastWeatherHttpCode = 0;
+
+  auto buildUrl = [&](bool useForecastEndpoint) -> String {
+    String url = meteoBaseUrl(model, useForecastEndpoint);
+    url += "?latitude=" + String(meteoLat,6) + "&longitude=" + String(meteoLon,6);
+    url += "&current=temperature_2m,relative_humidity_2m,apparent_temperature,pressure_msl,surface_pressure,"
+           "wind_speed_10m,wind_gusts_10m,precipitation,weather_code";
+    if (useForecastEndpoint) url += "&models=" + model;
+    url += "&temperature_unit=celsius&wind_speed_unit=ms&precipitation_unit=mm&pressure_unit=hPa&timezone=auto";
+    return url;
+  };
+
+  for (int pass = 0; pass < 2; ++pass) {
+    bool useForecastEndpoint = (pass == 1);
+    String url = buildUrl(useForecastEndpoint);
+    int code = 0;
+    String payload = httpGetMeteo(url, code, 2500);
+    lastWeatherHttpCode = code;
+
+    if (code == 200 && payload.length() && !isMeteoErrorPayload(payload)) {
+      if (payload.indexOf("\"current\"") != -1) return payload;
+      lastWeatherError = "No current in response";
+    } else {
+      String reason = meteoErrorReason(payload);
+      if (reason.length()) lastWeatherError = reason;
+      else if (code != 200) lastWeatherError = "HTTP " + String(code);
+      else lastWeatherError = "Empty payload";
+    }
   }
-  String payload = http.getString();
-  http.end();
+
+  // Fallback: derive current from hourly
+  String hourlyPayload = fetchWeatherHourlyForCurrent(model, meteoLat, meteoLon, false);
+  if (hourlyPayload.length()) {
+    String out;
+    if (buildCurrentFromHourlyPayload(hourlyPayload, out)) return out;
+  }
+  String hourlyPayloadForecast = fetchWeatherHourlyForCurrent(model, meteoLat, meteoLon, true);
+  if (hourlyPayloadForecast.length()) {
+    String out;
+    if (buildCurrentFromHourlyPayload(hourlyPayloadForecast, out)) return out;
+  }
+  return "";
+}
+
+String fetchWeatherHourlyForCurrent(const String& model, float lat, float lon, bool useForecastEndpoint) {
+  if (!isValidLatLon(lat, lon)) return "";
+  String url = meteoBaseUrl(model, useForecastEndpoint);
+  url += "?latitude=" + String(lat,6) + "&longitude=" + String(lon,6);
+  url += "&hourly=temperature_2m,relative_humidity_2m,apparent_temperature,pressure_msl,surface_pressure,"
+         "wind_speed_10m,wind_gusts_10m,precipitation,weather_code";
+  if (useForecastEndpoint) url += "&models=" + model;
+  url += "&forecast_hours=48&timeformat=unixtime&temperature_unit=celsius&wind_speed_unit=ms"
+         "&precipitation_unit=mm&pressure_unit=hPa&timezone=auto";
+  int code = 0;
+  String payload = httpGetMeteo(url, code, 3000);
+  if (code != 200 || isMeteoErrorPayload(payload)) return "";
   return payload;
+}
+
+bool buildCurrentFromHourlyPayload(const String& hourlyPayload, String& outPayload) {
+  if (isMeteoErrorPayload(hourlyPayload)) return false;
+  DynamicJsonDocument js(12 * 1024);
+  if (deserializeJson(js, hourlyPayload) != DeserializationError::Ok) {
+    return false;
+  }
+  JsonObject hourly = js["hourly"].as<JsonObject>();
+  JsonArray timeArr = hourly["time"].as<JsonArray>();
+  if (!timeArr.size()) return false;
+
+  time_t now = time(nullptr);
+  int bestIdx = 0;
+  long bestDiff = LONG_MAX;
+  for (int i = 0; i < (int)timeArr.size(); ++i) {
+    long t = timeArr[i].as<long>();
+    long d = labs(t - (long)now);
+    if (d < bestDiff) {
+      bestDiff = d;
+      bestIdx = i;
+    }
+  }
+
+  auto pick = [&](const char* key) -> float {
+    JsonArray arr = hourly[key].as<JsonArray>();
+    if (!arr.size() || bestIdx >= (int)arr.size()) return NAN;
+    return arr[bestIdx].as<float>();
+  };
+
+  DynamicJsonDocument out(1024);
+  out["utc_offset_seconds"] = js["utc_offset_seconds"] | 0;
+  JsonObject cur = out.createNestedObject("current");
+  cur["time"] = timeArr[bestIdx] | 0;
+  cur["temperature_2m"]       = pick("temperature_2m");
+  cur["relative_humidity_2m"] = pick("relative_humidity_2m");
+  cur["apparent_temperature"] = pick("apparent_temperature");
+  cur["pressure_msl"]         = pick("pressure_msl");
+  cur["surface_pressure"]     = pick("surface_pressure");
+  cur["wind_speed_10m"]       = pick("wind_speed_10m");
+  cur["wind_gusts_10m"]       = pick("wind_gusts_10m");
+  cur["precipitation"]        = pick("precipitation");
+  float wcode = pick("weather_code");
+  cur["weather_code"]         = isfinite(wcode) ? (int)wcode : -1;
+
+  outPayload = "";
+  serializeJson(out, outPayload);
+  return outPayload.length() > 0;
 }
 
 String fetchForecast(float lat, float lon) {
   if (!isValidLatLon(lat, lon)) return "";
-  HTTPClient http;
-  WiFiClientSecure secure;
-  secure.setInsecure(); // minimal HTTPS setup; replace with CA cert for full validation
-  http.setTimeout(3000); // NEW: shorter timeout
+  String model = cleanMeteoModel(meteoModel);
+  lastForecastError = "";
+  lastForecastHttpCode = 0;
 
-  String url = "https://api.open-meteo.com/v1/forecast?latitude=" + String(lat,6) +
-               "&longitude=" + String(lon,6) +
-               "&hourly=precipitation,precipitation_probability,wind_gusts_10m" +
-               "&daily=temperature_2m_min,temperature_2m_max,sunrise,sunset" +
-               "&forecast_hours=24&forecast_days=2" +
-               "&temperature_unit=celsius&wind_speed_unit=ms&precipitation_unit=mm&pressure_unit=hPa" +
-               "&timezone=auto";
+  auto buildUrl = [&](bool useForecastEndpoint) -> String {
+    String url = meteoBaseUrl(model, useForecastEndpoint);
+    url += "?latitude=" + String(lat,6) + "&longitude=" + String(lon,6);
+    url += "&hourly=precipitation,precipitation_probability,wind_gusts_10m"
+           "&daily=temperature_2m_min,temperature_2m_max,sunrise,sunset"
+           "&forecast_hours=24&forecast_days=2";
+    if (useForecastEndpoint) url += "&models=" + model;
+    url += "&temperature_unit=celsius&wind_speed_unit=ms&precipitation_unit=mm&pressure_unit=hPa&timezone=auto";
+    return url;
+  };
 
-  http.begin(secure, url);
-  int code = http.GET();
-  if (code != 200) {
-    http.end();
-    return "";
+  for (int pass = 0; pass < 2; ++pass) {
+    bool useForecastEndpoint = (pass == 1);
+    String url = buildUrl(useForecastEndpoint);
+    int code = 0;
+    String payload = httpGetMeteo(url, code, 3000);
+    lastForecastHttpCode = code;
+    if (code == 200 && payload.length() && !isMeteoErrorPayload(payload)) {
+      return payload;
+    }
+    String reason = meteoErrorReason(payload);
+    if (reason.length()) lastForecastError = reason;
+    else if (code != 200) lastForecastError = "HTTP " + String(code);
+    else lastForecastError = "Empty payload";
   }
-  String payload = http.getString();
-  http.end();
-  return payload;
+  return "";
 }
 
 // ---------- NEW helpers for rain history ----------
@@ -3255,12 +3387,6 @@ void turnOffZone(int z) {
   HomeScreen();
 }
 
-static void printRight(int xRight, int y, const char* s){
-  int16_t x1,y1; uint16_t w,h;
-  tft.getTextBounds(s, 0, y, &x1, &y1, &w, &h);
-  tft.setCursor(xRight - (int)w, y);
-  tft.print(s);
-}
 
 void turnOnValveManual(int z) {
   if (z < 0 || z >= (int)zonesCount || z >= (int)MAX_ZONES) return;
@@ -4053,6 +4179,11 @@ html += F("</b></a></div>");
   html += F("  cb.addEventListener('change', sync); sync();");
   html += F("}");
 
+  // Weather model: toggle custom input
+  html += F("const modelSel=document.getElementById('meteoModelSelect'); const customRow=document.getElementById('meteoModelCustomRow');");
+  html += F("if(modelSel && customRow){ const syncModel=()=>{ customRow.style.display=(modelSel.value==='custom')?'flex':'none'; };");
+  html += F("modelSel.addEventListener('change', syncModel); syncModel(); }");
+
   html += F("</script></body></html>");
   flush();
   server.sendContent("");
@@ -4148,9 +4279,32 @@ void handleSetupPage() {
 
   // Weather
   html += F("<div class='card narrow'><h3>Weather (Open-Meteo)</h3>");
+  String modelSel = cleanMeteoModel(meteoModel);
+  bool modelIsKnown = isKnownMeteoModel(modelSel);
   html += F("<div class='row'><label>Location Name</label><input class='in-wide' type='text' name='meteoLocation' value='"); html += meteoLocation; html += F("'><small>Optional label for UI/logs</small></div>");
   html += F("<div class='row'><label>Latitude</label><input class='in-med' type='text' name='meteoLat' value='"); html += latStr; html += F("'><small>e.g. -34.9285</small></div>");
   html += F("<div class='row'><label>Longitude</label><input class='in-med' type='text' name='meteoLon' value='"); html += lonStr; html += F("'><small>e.g. 138.6007</small></div>");
+  html += F("<div class='row'><label>Model</label><select class='in-med' name='meteoModelSelect' id='meteoModelSelect'>");
+  html += F("<option value='gfs'");           html += (modelSel == "gfs" ? " selected" : ""); html += F(">gfs</option>");
+  html += F("<option value='icon'");          html += (modelSel == "icon" ? " selected" : ""); html += F(">icon</option>");
+  html += F("<option value='ecmwf'");         html += (modelSel == "ecmwf" ? " selected" : ""); html += F(">ecmwf</option>");
+  html += F("<option value='meteofrance'");   html += (modelSel == "meteofrance" ? " selected" : ""); html += F(">meteofrance</option>");
+  html += F("<option value='jma'");           html += (modelSel == "jma" ? " selected" : ""); html += F(">jma</option>");
+  html += F("<option value='cma'");           html += (modelSel == "cma" ? " selected" : ""); html += F(">cma</option>");
+  html += F("<option value='gem'");           html += (modelSel == "gem" ? " selected" : ""); html += F(">gem</option>");
+  html += F("<option value='icon_seamless'"); html += (modelSel == "icon_seamless" ? " selected" : ""); html += F(">icon_seamless</option>");
+  html += F("<option value='icon_global'");   html += (modelSel == "icon_global" ? " selected" : ""); html += F(">icon_global</option>");
+  html += F("<option value='icon_eu'");       html += (modelSel == "icon_eu" ? " selected" : ""); html += F(">icon_eu</option>");
+  html += F("<option value='bom'");           html += (modelSel == "bom" ? " selected" : ""); html += F(">bom</option>");
+  html += F("<option value='bom_access_global'"); html += (modelSel == "bom_access_global" ? " selected" : ""); html += F(">bom_access_global</option>");
+  html += F("<option value='ukmo_seamless'"); html += (modelSel == "ukmo_seamless" ? " selected" : ""); html += F(">ukmo_seamless</option>");
+  html += F("<option value='custom'");        html += (!modelIsKnown ? " selected" : ""); html += F(">custom</option>");
+  html += F("</select><small>Open-Meteo model endpoint</small></div>");
+  html += F("<div class='row' id='meteoModelCustomRow' style='display:");
+  html += (modelIsKnown ? "none" : "flex");
+  html += F("'><label>Custom Model</label><input class='in-med' type='text' name='meteoModelCustom' value='");
+  html += (modelIsKnown ? "" : modelSel);
+  html += F("'><small>Use an Open-Meteo model slug (e.g., gfs, icon, ecmwf)</small></div>");
   html += F("<div class='row helptext'><label></label><small>No API key required. Enter your coordinates for Open-Meteo.</small></div>");
   html += F("</div>");
 
@@ -4903,6 +5057,8 @@ void loadConfig() {
 
   // NEW: Open-Meteo location label (optional trailing line)
   if (f.available()) { if ((s = _safeReadLine(f)).length()) meteoLocation = cleanName(s); }
+  // NEW: Open-Meteo model (optional trailing line)
+  if (f.available()) { if ((s = _safeReadLine(f)).length()) meteoModel = cleanMeteoModel(s); }
 
   f.close();
 
@@ -5001,6 +5157,8 @@ void saveConfig() {
   f.println(tftBlPin);
   // NEW: Open-Meteo location label
   f.println(cleanName(meteoLocation));
+  // NEW: Open-Meteo model
+  f.println(cleanMeteoModel(meteoModel));
 
   f.close();
 }
@@ -5067,6 +5225,7 @@ void handleConfigure() {
   float  oldLat    = meteoLat;
   float  oldLon    = meteoLon;
   String oldLoc    = meteoLocation;
+  String oldModel  = meteoModel;
   int oldTftSclk = tftSclkPin;
   int oldTftMosi = tftMosiPin;
   int oldTftCs   = tftCsPin;
@@ -5077,6 +5236,16 @@ void handleConfigure() {
   // Weather (Open-Meteo)
   if (server.hasArg("meteoLocation")) {
     meteoLocation = cleanName(server.arg("meteoLocation"));
+  }
+  if (server.hasArg("meteoModelSelect")) {
+    String sel = cleanMeteoModel(server.arg("meteoModelSelect"));
+    if (sel == "custom" && server.hasArg("meteoModelCustom")) {
+      meteoModel = cleanMeteoModel(server.arg("meteoModelCustom"));
+    } else {
+      meteoModel = cleanMeteoModel(sel);
+    }
+  } else if (server.hasArg("meteoModel")) {
+    meteoModel = cleanMeteoModel(server.arg("meteoModel"));
   }
   if (server.hasArg("meteoLat")) {
     String s = server.arg("meteoLat"); s.trim();
@@ -5319,7 +5488,7 @@ void handleConfigure() {
     if (!isfinite(a) || !isfinite(b)) return true;
     return fabsf(a - b) > 0.0001f;
   };
-  if (coordChanged(oldLat, meteoLat) || coordChanged(oldLon, meteoLon) || (oldLoc != meteoLocation)) {
+  if (coordChanged(oldLat, meteoLat) || coordChanged(oldLon, meteoLon) || (oldLoc != meteoLocation) || (oldModel != meteoModel)) {
     // Clear current / forecast caches and timers
     cachedWeatherData   = "";
     cachedForecastData  = "";
