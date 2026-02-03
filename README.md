@@ -15,8 +15,8 @@ Built for **reliability, flexibility, and real-world garden setups** — from sm
 * **Rain & wind-aware scheduling**
 * **Modern web UI**
 * **Optional TFT / OLED / LCD displays**
-* **KC868-A board support with GPIO fallback**
-* **ESP32-S3 recommended (ESP8266 also supported)**
+* **KC868-A6 board support with GPIO fallback**
+* **ESP32-S3 recommended (KC868-A6 also supported)**
 
 ---
 
@@ -43,7 +43,7 @@ Lightweight option using common **16×2 or 20×4 LCDs**.
 
 ## 🌦 Weather Integration
 
-* Goto: https://open-meteo.com/en/docs
+* Goto: https://open-meteo.com/en/docs to get lat and long.
 * Enter your Latitude and longitude in Setup.
 * Save.  
 <img width="1030" height="173" alt="image" src="https://github.com/user-attachments/assets/a4094761-555c-4059-bfe3-a7f00c617894" />
