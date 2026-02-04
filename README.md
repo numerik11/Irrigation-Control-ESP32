@@ -289,7 +289,6 @@ Download Kincony PCF8574 library:
 
 -Esp32 w/TFT 8 Relay Module 
 
-<img width="610" height="354" alt="image" src="https://github.com/user-attachments/assets/45049db9-c9a1-4862-a8cc-770251b8b495" />
-
+<img width="610" height="354" alt="image" src="https://github.com/user-attachments/assets/03cd3421-9d22-4272-9b58-5f9a08d18479" />
 
 <img width="403" height="249" alt="image" src="https://github.com/user-attachments/assets/63f053da-0656-4761-a37d-9579fe1d955f" />
