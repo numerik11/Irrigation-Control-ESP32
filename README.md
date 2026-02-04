@@ -278,11 +278,6 @@ Download Kincony PCF8574 library:
 
 <img width="926" height="877" alt="image" src="https://github.com/user-attachments/assets/3814479b-1b16-4689-8545-2f1d3d3a28bf" />
 
--GPIO/Timezone/MQTT Page
-
-<img width="663" height="925" alt="image" src="https://github.com/user-attachments/assets/3f734430-b14d-4861-992b-66c234913597" />
-<img width="666" height="259" alt="image" src="https://github.com/user-attachments/assets/61ba1308-9258-4ffe-a550-2ea1b438b1ee" />
-
 -KC868-A6 Wiring
 
 <img width="791" height="754" alt="Screenshot 2025-07-25 233726" src="https://github.com/user-attachments/assets/f601fb06-e70c-4fc6-a7f3-5fdf410b4e73" />
