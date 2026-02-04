@@ -276,8 +276,7 @@ Download Kincony PCF8574 library:
 
 -Setup Page
 
-<img width="931" height="878" alt="image" src="https://github.com/user-attachments/assets/f0803af9-1f69-41b2-a368-bd27c94870fd" />
-
+<img width="926" height="877" alt="image" src="https://github.com/user-attachments/assets/3814479b-1b16-4689-8545-2f1d3d3a28bf" />
 
 -GPIO/Timezone/MQTT Page
 
