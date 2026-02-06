@@ -992,6 +992,27 @@ static uint8_t g_tftBrightness = 125; // 0-255 duty when ON
 static const int TFT_PWM_CH = 7;      // LEDC channel for TFT BL
 static bool g_forceHomeReset = false; // force full HomeScreen repaint
 static bool g_forceRainReset = false; // force full RainScreen repaint
+
+// ---------- LEDC PWM compatibility (ESP32 Arduino core 2.x vs 3.x) ----------
+#if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
+static bool ledcAttachCompat(int pin, uint32_t freq, uint8_t resBits) {
+  return ledcAttach(pin, freq, resBits);
+}
+static void ledcWriteCompat(int pin, uint32_t duty) {
+  ledcWrite(pin, duty);
+}
+#else
+static bool ledcAttachCompat(int pin, uint32_t freq, uint8_t resBits) {
+  double actual = ledcSetup(TFT_PWM_CH, freq, resBits);
+  if (actual <= 0) return false;
+  ledcAttachPin(pin, TFT_PWM_CH);
+  return true;
+}
+static void ledcWriteCompat(int /*pin*/, uint32_t duty) {
+  ledcWrite(TFT_PWM_CH, duty);
+}
+#endif
+
 static void tftInitBacklightPwm() {
   g_tftPwmReady = false;
   if (tftBlPin < 0) return;
@@ -1002,14 +1023,12 @@ static void tftInitBacklightPwm() {
   }
   const uint32_t freq = 5000;
   const uint8_t resBits = 8;
-  double actual = ledcSetup(TFT_PWM_CH, freq, resBits);
-  if (actual <= 0) {
+  if (!ledcAttachCompat(tftBlPin, freq, resBits)) {
     Serial.println("[TFT] LEDC setup failed; PWM backlight disabled.");
     return;
   }
-  ledcAttachPin(tftBlPin, TFT_PWM_CH);
   g_tftPwmReady = true;
-  ledcWrite(TFT_PWM_CH, g_tftBlOn ? g_tftBrightness : 0);
+  ledcWriteCompat(tftBlPin, g_tftBlOn ? g_tftBrightness : 0);
 }
 
 static inline void tftDisplay(bool on){
@@ -1031,7 +1050,7 @@ static inline void tftBacklight(bool on){
       return;
     }
     if (g_tftPwmReady) {
-      ledcWrite(TFT_PWM_CH, on ? g_tftBrightness : 0);
+      ledcWriteCompat(tftBlPin, on ? g_tftBrightness : 0);
     } else {
       pinMode(tftBlPin, OUTPUT);
       digitalWrite(tftBlPin, on ? HIGH : LOW);   // most modules: HIGH = on
@@ -1047,7 +1066,7 @@ static void tftSetBrightness(uint8_t pct){ // pct: 0-100
   g_tftBrightness = duty;
   if (tftBlPin >= 0) {
     if (g_tftPwmReady) {
-      ledcWrite(TFT_PWM_CH, g_tftBlOn ? duty : 0);
+      ledcWriteCompat(tftBlPin, g_tftBlOn ? duty : 0);
     } else {
       // if no PWM, fall back to on/off at threshold
       digitalWrite(tftBlPin, (pct > 0) ? HIGH : LOW);
@@ -3442,7 +3461,7 @@ void turnOnValveManual(int z) {
     setWaterSourceRelays(mainsOn, tankOn);
   }
 
-  logEvent(z, "MANUAL START", src, false);
+  // Manual starts are not logged
 }
 
 void turnOffValveManual(int z) {
