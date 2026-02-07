@@ -1,4 +1,4 @@
-//130x230 SPI TFT / ESP32 
+//130x230 SPI TFT / ESP32-S3 DEV / ESP32 DEV 
 
 #ifndef ENABLE_DEBUG_ROUTES
   #define ENABLE_DEBUG_ROUTES 0   // set to 1 when you need them
@@ -28,7 +28,6 @@
 #include <math.h>
 extern "C" {
   #include "esp_log.h"
-  #include "driver/temp_sensor.h"
   #include "esp_wifi.h"
 }
 #include <time.h>
@@ -37,12 +36,21 @@ extern "C" {
 
 // ---------- Hardware ----------
 static const uint8_t MAX_ZONES = 16;
+#if defined(CONFIG_IDF_TARGET_ESP32)
+static const int I2C_SDA_DEFAULT = 21;
+static const int I2C_SCL_DEFAULT = 22;
+#else
 static const int I2C_SDA_DEFAULT = 8;
 static const int I2C_SCL_DEFAULT = 9;
+#endif
 static int i2cSdaPin = I2C_SDA_DEFAULT;
 static int i2cSclPin = I2C_SCL_DEFAULT;
 #ifndef STATUS_PIXEL_PIN
-#define STATUS_PIXEL_PIN 48   // ESP32-S3 DevKitC-1 onboard WS2812; set -1 to disable
+  #if defined(CONFIG_IDF_TARGET_ESP32S3)
+    #define STATUS_PIXEL_PIN 48   // ESP32-S3 DevKitC-1 onboard WS2812
+  #else
+    #define STATUS_PIXEL_PIN -1   // disable by default on non-S3 targets
+  #endif
 #endif
 static const uint8_t STATUS_PIXEL_COUNT = 1;
 
@@ -60,11 +68,19 @@ static constexpr int16_t TFT_H = 320;
 
 // Choose pins that do NOT clash with your I2C (4/15) or other IO.
 // Defaults (editable from Setup -> SPI (TFT)):
+#if defined(CONFIG_IDF_TARGET_ESP32)
+static const int TFT_SCLK_DEFAULT = 18;
+static const int TFT_MOSI_DEFAULT = 23;
+static const int TFT_CS_DEFAULT   = 5;
+static const int TFT_DC_DEFAULT   = 2;
+static const int TFT_RST_DEFAULT  = 4;
+#else
 static const int TFT_SCLK_DEFAULT = 41;  // SCL
 static const int TFT_MOSI_DEFAULT = 42;  // SDA
-static const int TFT_CS_DEFAULT   = 1;  // CS (avoid GPIO1 tank ADC)
-static const int TFT_DC_DEFAULT   = 2;  // DC (avoid GPIO2 LED)
+static const int TFT_CS_DEFAULT   = 1;   // CS (avoid GPIO1 tank ADC)
+static const int TFT_DC_DEFAULT   = 2;   // DC (avoid GPIO2 LED)
 static const int TFT_RST_DEFAULT  = 21;  // RST (-1 allowed)
+#endif
 static const int TFT_BL_DEFAULT   = -1;  // or -1 if tied to 3V3
 
 static int tftSclkPin = TFT_SCLK_DEFAULT;
@@ -803,6 +819,9 @@ inline int gpioLevel(bool on) {
 
 inline void gpioInitOutput(int pin) {
   if (pin < 0 || pin > 39) return;
+  #if defined(CONFIG_IDF_TARGET_ESP32)
+  if (pin >= 6 && pin <= 11) return; // SPI flash/PSRAM pins on classic ESP32
+  #endif
   pinMode(pin, OUTPUT);
   digitalWrite(pin, gpioLevel(false));  // ensure OFF
 }
@@ -811,12 +830,21 @@ inline void gpioZoneWrite(int z, bool on) {
   if (z < 0 || z >= (int)MAX_ZONES) return;
   int pin = zonePins[z];
   if (pin < 0 || pin > 39) return;
+  #if defined(CONFIG_IDF_TARGET_ESP32)
+  if (pin >= 6 && pin <= 11) return; // SPI flash/PSRAM pins on classic ESP32
+  #endif
   digitalWrite(pin, gpioLevel(on));
 }
 
 inline void gpioSourceWrite(bool mainsOn, bool tankOn) {
-  if (mainsPin >= 0 && mainsPin <= 39) digitalWrite(mainsPin, gpioLevel(mainsOn));
-  if (tankPin  >= 0 && tankPin  <= 39) digitalWrite(tankPin,  gpioLevel(tankOn));
+  bool mainsOk = (mainsPin >= 0 && mainsPin <= 39);
+  bool tankOk  = (tankPin  >= 0 && tankPin  <= 39);
+  #if defined(CONFIG_IDF_TARGET_ESP32)
+  if (mainsOk && mainsPin >= 6 && mainsPin <= 11) mainsOk = false;
+  if (tankOk  && tankPin  >= 6 && tankPin  <= 11) tankOk = false;
+  #endif
+  if (mainsOk) digitalWrite(mainsPin, gpioLevel(mainsOn));
+  if (tankOk)  digitalWrite(tankPin,  gpioLevel(tankOn));
 }
 
 inline void setWaterSourceRelays(bool mainsOn, bool tankOn) {
@@ -856,7 +884,15 @@ inline bool isValidAdcPin(int pin) {
 }
 
 inline bool isValidGpioPin(int pin) {
+  #if defined(CONFIG_IDF_TARGET_ESP32)
+  if (pin < 0 || pin > 39) return false;
+  if (pin >= 6 && pin <= 11) return false; // SPI flash/PSRAM pins
+  return true;
+  #elif defined(CONFIG_IDF_TARGET_ESP32S3)
   return (pin >= 0 && pin <= 48);
+  #else
+  return (pin >= 0 && pin <= 48);
+  #endif
 }
 
 inline bool isUnsafeTftPin(int pin) {
@@ -934,9 +970,11 @@ void statusPixelSet(uint8_t r,uint8_t g,uint8_t b) {
   statusPixel.show();
 }
 
-#include "soc/soc_caps.h"
+#if __has_include("soc/soc_caps.h")
+  #include "soc/soc_caps.h"
+#endif
 
-#if SOC_TEMPERATURE_SENSOR_SUPPORTED
+#if defined(SOC_TEMPERATURE_SENSOR_SUPPORTED) && SOC_TEMPERATURE_SENSOR_SUPPORTED && __has_include("driver/temperature_sensor.h")
   #include "driver/temperature_sensor.h"
 
   static bool tempSensorReady = false;
@@ -1194,7 +1232,9 @@ void setup() {
   }
   initGpioPinsForZones();
 
-  pinMode(LED_PIN, OUTPUT);
+  if (LED_PIN >= 0 && isValidGpioPin(LED_PIN)) {
+    pinMode(LED_PIN, OUTPUT);
+  }
 
   // Status pixel (WS2812)
   if (STATUS_PIXEL_PIN >= 0) {
