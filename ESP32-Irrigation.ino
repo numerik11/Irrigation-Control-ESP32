@@ -4103,7 +4103,7 @@ void handleRoot() {
 
   // Location card with Open-Meteo link
   html += F("<div class='card'><h3>Location</h3>"
-            "<a class='chip' id='meteoLink' href='https://open-meteo.com/' target='_blank' rel='noopener'>"
+            "<a class='chip' id='meteoLink' href='https://open-meteo.com/en/docs?latitude=-35.1076&longitude=138.5573' target='_blank' rel='noopener'>"
             "<b id='cityName'>");
 html += cityName;   // initial label; JS will overwrite from /status
 html += F("</b></a></div>");
@@ -4482,7 +4482,7 @@ html += F("</b></a></div>");
   html += F("  const lat=Number.isFinite(st.lat)?st.lat:null;");
   html += F("  const lon=Number.isFinite(st.lon)?st.lon:null;");
   html += F("  if(lat!==null && lon!==null){ cityLink.href='https://open-meteo.com/en/docs?latitude='+lat+'&longitude='+lon; }");
-  html += F("  else { cityLink.href='https://open-meteo.com/'; }");
+  html += F("  else { cityLink.href='https://open-meteo.com/en/docs?latitude=-35.1076&longitude=138.5573'; }");
   html += F("}");
 
 
