@@ -51,7 +51,6 @@ PCF8574 pcfIn (&I2Cbus, 0x22, I2C_SDA_DEFAULT, I2C_SCL_DEFAULT);
 PCF8574 pcfOut(&I2Cbus, 0x24, I2C_SDA_DEFAULT, I2C_SCL_DEFAULT);
 Adafruit_NeoPixel statusPixel(STATUS_PIXEL_COUNT, STATUS_PIXEL_PIN, NEO_GRB + NEO_KHZ800);
 bool statusPixelReady = false;
-bool tempSensorReady = false;
 
 // ---------- ST7789 (1.9") TFT ----------
 // Most 1.9" ST7789 modules are 170x320.
@@ -935,31 +934,56 @@ void statusPixelSet(uint8_t r,uint8_t g,uint8_t b) {
   statusPixel.show();
 }
 
-bool initTempSensor() {
-  if (tempSensorReady) return true;
+#include "soc/soc_caps.h"
 
-  temp_sensor_config_t cfg;
-  cfg.dac_offset = TSENS_DAC_L2;
-  cfg.clk_div = 6;
+#if SOC_TEMPERATURE_SENSOR_SUPPORTED
+  #include "driver/temperature_sensor.h"
 
-  if (temp_sensor_set_config(cfg) == ESP_OK && temp_sensor_start() == ESP_OK) {
+  static bool tempSensorReady = false;
+  static temperature_sensor_handle_t gTempHandle = nullptr;
+
+  bool initTempSensor() {
+    if (tempSensorReady && gTempHandle) return true;
+
+    // Choose a realistic range the driver can operate in.
+    // This is *chip* temperature, not ambient.
+    temperature_sensor_config_t cfg = TEMPERATURE_SENSOR_CONFIG_DEFAULT(10, 60);
+
+    esp_err_t err = temperature_sensor_install(&cfg, &gTempHandle);
+    if (err != ESP_OK || !gTempHandle) {
+      tempSensorReady = false;
+      return false;
+    }
+
+    err = temperature_sensor_enable(gTempHandle);
+    if (err != ESP_OK) {
+      tempSensorReady = false;
+      return false;
+    }
+
     tempSensorReady = true;
     return true;
   }
 
-  return false;
-}
+  bool readChipTempC(float& outC) {
+    if (!tempSensorReady && !initTempSensor()) return false;
 
-bool readChipTempC(float& outC) {
-  if (!tempSensorReady && !initTempSensor()) return false;
-  float c = 0.0f;
-  if (temp_sensor_read_celsius(&c) == ESP_OK) {
-    outC = c;
-    return true;
+    float c = NAN;
+    esp_err_t err = temperature_sensor_get_celsius(gTempHandle, &c);
+    if (err == ESP_OK) {
+      outC = c;
+      return true;
+    }
+    return false;
   }
-  return false;
-}
 
+#else
+  // Boards/chips without supported internal temp sensor
+  static bool tempSensorReady = false;
+
+  bool initTempSensor() { tempSensorReady = false; return false; }
+  bool readChipTempC(float& outC) { outC = NAN; return false; }
+#endif
 
 // ---------- Next Water type + forward decl ----------
 struct NextWaterInfo {
@@ -3579,7 +3603,7 @@ void handleRoot() {
   }
 
   int wcode = werr ? -1 : (js["current"]["weather_code"] | -1);
-  String cond = (wcode >= 0) ? String(meteoCodeToMain(wcode)) : String("-");
+  String cond = (wcode >= 0) ? String(meteoCodeToDesc(wcode)) : String("-");
   if (cond == "") cond = "-";
   String cityName = meteoLocationLabel();
   if (cityName == "") cityName = "-";
@@ -3800,7 +3824,7 @@ html += F("</b></a></div>");
   html += F("<div class='chip'>Start: <b id='nwTime'>--:--</b></div>");
   html += F("<div class='chip'>ETA: <b id='nwETA'>--</b></div>");
   html += F("<div class='chip'>Duration: <b id='nwDur'>--</b></div>");
-  html += F("</div><div class='hint'>Active weather delays cancel watering if scheduled.</div></div>");
+  html += F("</div><div class='hint'>Active Rain cancels watering, Active Wind postpones until windspeed drops.</div></div>");
 
   html += F("</div></div>"); // end glass / grid
   flush();
@@ -4164,6 +4188,10 @@ html += F("</b></a></div>");
   html += F("const feelsEl=document.getElementById('feelsChip'); if(feelsEl){ const v=st.feels_like; feelsEl.textContent=(typeof v==='number')?v.toFixed(1)+' C':'--'; }");
   html += F("const humEl=document.getElementById('humChip'); if(humEl){ const v=st.humidity; humEl.textContent=(typeof v==='number')?Math.round(v)+' %':'--'; }");
   html += F("const windEl=document.getElementById('windChip'); if(windEl){ const v=st.wind; windEl.textContent=(typeof v==='number')?v.toFixed(1)+' m/s':'--'; }");
+  html += F("const condEl=document.getElementById('cond'); if(condEl){");
+  html += F("  const cd=(typeof st.condDesc==='string' && st.condDesc.length)?st.condDesc:'';");
+  html += F("  const cm=(typeof st.condMain==='string' && st.condMain.length)?st.condMain:'';");
+  html += F("  condEl.textContent=cd||cm||'--'; }");
 
   // keep master pill synced
   html += F("const bm=document.getElementById('btn-master'); const ms=document.getElementById('master-state');");
