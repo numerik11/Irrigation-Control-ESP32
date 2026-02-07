@@ -1,4 +1,4 @@
-//i2c OLED
+//i2c OLED / ESP32 / ESP32 - s3
 
 #ifndef ENABLE_DEBUG_ROUTES
   #define ENABLE_DEBUG_ROUTES 0   // set to 1 when you need them
@@ -39,13 +39,22 @@ extern "C" {
 // ---------- Hardware ----------
 static const uint8_t MAX_ZONES = 16;
 
+#if defined(CONFIG_IDF_TARGET_ESP32)
+static const int I2C_SDA_DEFAULT = 21;
+static const int I2C_SCL_DEFAULT = 22;
+#else
 static const int I2C_SDA_DEFAULT = 8;
 static const int I2C_SCL_DEFAULT = 9;
+#endif
 static int i2cSdaPin = I2C_SDA_DEFAULT;
 static int i2cSclPin = I2C_SCL_DEFAULT;
  
 #ifndef STATUS_PIXEL_PIN
-#define STATUS_PIXEL_PIN 48   // // ESP32-S3 DevKitC-1 onboard WS2812; set -1 to disable
+  #if defined(CONFIG_IDF_TARGET_ESP32S3)
+    #define STATUS_PIXEL_PIN 48   // ESP32-S3 DevKitC-1 onboard WS2812
+  #else
+    #define STATUS_PIXEL_PIN -1   // disable by default on non-S3 targets
+  #endif
 #endif
 static const uint8_t STATUS_PIXEL_COUNT = 1;
 
@@ -86,7 +95,11 @@ int mainsPin = 25;
 int tankPin  = 26;
 
 const int LED_PIN  = 4;
+#if defined(CONFIG_IDF_TARGET_ESP32)
+int tankLevelPin  = 34; // ADC1 input on classic ESP32
+#else
 int tankLevelPin  = 11; // ADC input
+#endif
 
 // Physical rain sensor
 bool rainSensorEnabled = false;
@@ -526,17 +539,38 @@ static time_t parseLocalIsoTime(const char* s) {
 }
 
 inline bool isValidAdcPin(int pin) {
-  // Generic guard for ESP32 family (0..39 are GPIO-capable)
+  #if defined(CONFIG_IDF_TARGET_ESP32)
+  // Prefer ADC1 pins on classic ESP32 (ADC2 conflicts with Wi-Fi).
+  return (pin >= 32 && pin <= 39);
+  #elif defined(CONFIG_IDF_TARGET_ESP32S3)
+  return (pin >= 1 && pin <= 20);
+  #else
   return (pin >= 0 && pin <= 39);
+  #endif
 }
 
 inline bool isValidGpioPin(int pin) {
+  #if defined(CONFIG_IDF_TARGET_ESP32)
+  if (pin < 0 || pin > 39) return false;
+  if (pin >= 6 && pin <= 11) return false; // SPI flash/PSRAM pins
+  return true;
+  #elif defined(CONFIG_IDF_TARGET_ESP32S3)
   return (pin >= 0 && pin <= 48);
+  #else
+  return (pin >= 0 && pin <= 48);
+  #endif
 }
 
 static void sanitizePinConfig() {
   if (!isValidGpioPin(i2cSdaPin)) i2cSdaPin = I2C_SDA_DEFAULT;
   if (!isValidGpioPin(i2cSclPin)) i2cSclPin = I2C_SCL_DEFAULT;
+  if (!isValidAdcPin(tankLevelPin)) {
+    #if defined(CONFIG_IDF_TARGET_ESP32)
+    tankLevelPin = 34;
+    #elif defined(CONFIG_IDF_TARGET_ESP32S3)
+    tankLevelPin = 1;
+    #endif
+  }
 }
 
 int tankPercent() {
@@ -733,6 +767,9 @@ inline int gpioLevel(bool on) {
 
 inline void gpioInitOutput(int pin) {
   if (pin < 0 || pin > 39) return;
+  #if defined(CONFIG_IDF_TARGET_ESP32)
+  if (pin >= 6 && pin <= 11) return; // SPI flash/PSRAM pins on classic ESP32
+  #endif
   pinMode(pin, OUTPUT);
   digitalWrite(pin, gpioLevel(false));  // ensure OFF
 }
@@ -741,12 +778,21 @@ inline void gpioZoneWrite(int z, bool on) {
   if (z < 0 || z >= (int)MAX_ZONES) return;
   int pin = zonePins[z];
   if (pin < 0 || pin > 39) return;
+  #if defined(CONFIG_IDF_TARGET_ESP32)
+  if (pin >= 6 && pin <= 11) return; // SPI flash/PSRAM pins on classic ESP32
+  #endif
   digitalWrite(pin, gpioLevel(on));
 }
 
 inline void gpioSourceWrite(bool mainsOn, bool tankOn) {
-  if (mainsPin >= 0 && mainsPin <= 39) digitalWrite(mainsPin, gpioLevel(mainsOn));
-  if (tankPin  >= 0 && tankPin  <= 39) digitalWrite(tankPin,  gpioLevel(tankOn));
+  bool mainsOk = (mainsPin >= 0 && mainsPin <= 39);
+  bool tankOk  = (tankPin  >= 0 && tankPin  <= 39);
+  #if defined(CONFIG_IDF_TARGET_ESP32)
+  if (mainsOk && mainsPin >= 6 && mainsPin <= 11) mainsOk = false;
+  if (tankOk  && tankPin  >= 6 && tankPin  <= 11) tankOk = false;
+  #endif
+  if (mainsOk) digitalWrite(mainsPin, gpioLevel(mainsOn));
+  if (tankOk)  digitalWrite(tankPin,  gpioLevel(tankOn));
 }
 
 inline void setWaterSourceRelays(bool mainsOn, bool tankOn) {
@@ -852,7 +898,9 @@ void setup() {
     checkI2CHealth();
   }
 
-  pinMode(LED_PIN, OUTPUT);
+  if (LED_PIN >= 0 && isValidGpioPin(LED_PIN)) {
+    pinMode(LED_PIN, OUTPUT);
+  }
 
   // Status pixel (WS2812)
   if (STATUS_PIXEL_PIN >= 0) {
@@ -2096,7 +2144,7 @@ void turnOnValveManual(int z) {
     int pin = zonePins[z];
     if (pin < 0 || pin > 39) {
       Serial.printf("[VALVE] Z%d has no GPIO pin assigned; skipping manual start\n", z+1);
-      cancelStart(z, "NO_PIN", false);
+      if (z >= 0 && z < (int)MAX_ZONES) pendingStart[z] = false;
       return;
     }
   }
@@ -2113,9 +2161,9 @@ void turnOnValveManual(int z) {
   }
 
   // Cancel manual requests during block/rain; queue during wind
-  if (isBlockedNow())  { cancelStart(z, "BLOCKED", false); return; }
-  if (rainActive)      { cancelStart(z, "RAIN",    true ); return; }
-  if (windActive)      { lastStartSlot[z] = 1; pendingStart[z] = true; logEvent(z, "QUEUED", "WIND", false); return; }
+  if (isBlockedNow())  { if (z >= 0 && z < (int)MAX_ZONES) pendingStart[z] = false; return; }
+  if (rainActive)      { if (z >= 0 && z < (int)MAX_ZONES) pendingStart[z] = false; return; }
+  if (windActive)      { lastStartSlot[z] = 1; pendingStart[z] = true; return; }
 
   zoneStartMs[z] = millis();
   zoneActive[z] = true;
@@ -2134,7 +2182,7 @@ void turnOnValveManual(int z) {
     setWaterSourceRelays(mainsOn, tankOn);
   }
 
-  logEvent(z, "MANUAL START", src, false);
+  // Manual starts are not logged
 }
 
 void turnOffValveManual(int z) {
