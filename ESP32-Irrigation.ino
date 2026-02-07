@@ -1928,7 +1928,12 @@ void loop() {
     if (manualActive) {
       drawManualSelection();
     } else {
-      HomeScreen();
+      int activeZone = -1;
+      for (int z = 0; z < (int)zonesCount; ++z) {
+        if (zoneActive[z]) { activeZone = z; break; }
+      }
+      if (activeZone >= 0) updateLCDForZone(activeZone);
+      else HomeScreen();
     }
   }
   delay(LOOP_SLEEP_MS);
@@ -2592,7 +2597,9 @@ void toggleBacklight(){
 
 void updateLCDForZone(int zone) {
   static unsigned long lastUpdate=0; unsigned long now=millis();
-  if (now - lastUpdate < 1000) return; lastUpdate = now;
+  const unsigned long minUiInterval = displayUseTft ? 180UL : 1000UL;
+  if (now - lastUpdate < minUiInterval) return;
+  lastUpdate = now;
 
   unsigned long elapsed=(now - zoneStartMs[zone]) / 1000;
   unsigned long total = zoneRunTotalSec[zone];
@@ -2615,33 +2622,140 @@ void updateLCDForZone(int zone) {
   unsigned long es = elapsed % 60;
   unsigned long rm = rem / 60;
   unsigned long rs = rem % 60;
+  int pct = (total > 0) ? (int)((elapsed * 100UL) / total) : 0;
+  if (pct < 0) pct = 0;
+  if (pct > 100) pct = 100;
 
-  tft.fillScreen(ST77XX_BLACK);
-  tft.setTextColor(ST77XX_WHITE);
-  tft.setTextSize(3);
-  tft.setCursor(10, 20);
-  tft.print(zoneNames[zone]);
+  const int W = tft.width();
+  const int H = tft.height();
+  const int pad = 8;
+  const int cardY = 44;
+  const int cardH = 128;
+  const int progCardY = 174;
+  const int progCardH = 52;
+  const int barX = pad + 12;
+  const int barY = 198;
+  const int barW = W - 2 * pad - 24;
+  const int barH = 20;
 
+  static bool runInit = false;
+  static int lastZone = -1;
+  static int lastW = -1, lastH = -1;
+  static unsigned long lastElapsed = 0xFFFFFFFFUL;
+  static unsigned long lastRemain = 0xFFFFFFFFUL;
+  static int lastPct = -1;
+  static int lastDripFrame = -1;
+
+  bool layoutChanged = (!runInit || lastZone != zone || lastW != W || lastH != H);
+  if (layoutChanged) {
+    tft.fillScreen(C_BG);
+    drawTopBar("RUNNING", "LIVE", C_GOOD);
+    drawCard(pad, cardY, W - 2 * pad, cardH, C_PANEL, C_EDGE);
+    drawCard(pad, progCardY, W - 2 * pad, progCardH, C_PANEL, C_EDGE);
+    tft.drawRect(barX, barY, barW, barH, C_EDGE);
+    runInit = true;
+    lastZone = zone;
+    lastW = W;
+    lastH = H;
+    lastElapsed = 0xFFFFFFFFUL;
+    lastRemain = 0xFFFFFFFFUL;
+    lastPct = -1;
+    lastDripFrame = -1;
+  }
+
+  tft.setTextColor(C_TEXT);
   tft.setTextSize(2);
-  tft.setCursor(10, 80);
-  tft.print("Elapsed: ");
-  if (em < 10) tft.print('0');
-  tft.print(em);
-  tft.print(":");
-  if (es < 10) tft.print('0');
-  tft.print(es);
 
-  tft.setCursor(10, 115);
-  if (elapsed<total) {
-    tft.print("Remain: ");
+  if (layoutChanged || lastZone != zone) {
+    tft.fillRect(pad + 8, 56, W - 2 * pad - 16, 24, C_PANEL);
+    tft.setCursor(pad + 10, 58);
+    tft.print("Active: ");
+    tft.print(zoneNames[zone]);
+    lastZone = zone;
+  }
+
+  if (layoutChanged || elapsed != lastElapsed) {
+    tft.fillRect(pad + 8, 86, W - 2 * pad - 16, 24, C_PANEL);
+    tft.setCursor(pad + 10, 88);
+    tft.print("Elapsed ");
+    if (em < 10) tft.print('0');
+    tft.print(em);
+    tft.print(":");
+    if (es < 10) tft.print('0');
+    tft.print(es);
+    lastElapsed = elapsed;
+  }
+
+  if (layoutChanged || rem != lastRemain) {
+    tft.fillRect(pad + 8, 114, W - 2 * pad - 16, 24, C_PANEL);
+    tft.setCursor(pad + 10, 116);
+    tft.print("Remaining ");
     if (rm < 10) tft.print('0');
     tft.print(rm);
-    tft.print("m ");
+    tft.print(":");
     if (rs < 10) tft.print('0');
     tft.print(rs);
-    tft.print("s");
-  } else {
-    tft.print("Complete");
+    lastRemain = rem;
+  }
+
+  if (layoutChanged || pct != lastPct) {
+    tft.fillRect(pad + 8, 176, W - 2 * pad - 16, 20, C_PANEL);
+    tft.setTextSize(2);
+    tft.setTextColor(C_ACCENT);
+    tft.setCursor(pad + 12, 176);
+    tft.print("Progress ");
+    tft.print(pct);
+    tft.print("%");
+
+    tft.fillRect(barX + 1, barY + 1, barW - 2, barH - 2, C_BG);
+    int fillW = (pct * (barW - 2)) / 100;
+    if (fillW > 0) tft.fillRect(barX + 1, barY + 1, fillW, barH - 2, C_GOOD);
+    lastPct = pct;
+  }
+
+  // Decorative blue drip animation in front of the run card.
+  // Drawn in a narrow strip to keep redraw cost low.
+  int dripFrame = (int)((now / 180UL) % 36UL);
+  if (layoutChanged || dripFrame != lastDripFrame) {
+    const uint16_t C_DRIP = RGB(95, 182, 255);
+    const uint16_t C_POT = RGB(168, 104, 66);
+    const uint16_t C_SOIL = RGB(86, 58, 40);
+    const uint16_t C_PLANT = RGB(76, 172, 92);
+    const int dropX[3] = { W - 53, W - 45, W - 38 };
+    const int dropR = 2;
+    const int plantCX = (dropX[0] + dropX[2]) / 2;
+    const int dripLeft = dropX[0] - dropR - 1;
+    const int dripRight = dropX[2] + dropR + 1;
+    const int iconLeft = plantCX - 10;
+    const int iconRight = plantCX + 10;
+    const int dripAreaX = (iconLeft < dripLeft) ? iconLeft : dripLeft;
+    const int dripAreaY = 54;
+    const int dripAreaW = ((iconRight > dripRight) ? iconRight : dripRight) - dripAreaX + 1;
+    const int dripAreaH = 92;
+    tft.fillRect(dripAreaX, dripAreaY, dripAreaW, dripAreaH, C_PANEL);
+
+    const int dropBaseY = 58;
+    for (int i = 0; i < 3; ++i) {
+      int p = (dripFrame + i * 12) % 36;
+      if (p < 24) {
+        int y = dropBaseY + p;
+        tft.fillCircle(dropX[i], y, dropR, C_DRIP);
+        tft.drawPixel(dropX[i], y - 3, C_DRIP);
+      }
+    }
+
+    // Simple plant-in-pot icon under the falling drops.
+    const int potTopY = dripAreaY + dripAreaH - 18;
+    for (int i = 0; i < 8; ++i) {
+      tft.drawFastHLine(plantCX - 8 + i, potTopY + i, 16 - (i * 2), C_POT);
+    }
+    tft.drawFastHLine(plantCX - 8, potTopY + 1, 16, C_SOIL);
+    tft.drawFastVLine(plantCX, potTopY - 10, 10, C_PLANT);
+    tft.fillCircle(plantCX - 5, potTopY - 7, 3, C_PLANT);
+    tft.fillCircle(plantCX + 5, potTopY - 6, 3, C_PLANT);
+    tft.drawPixel(plantCX - 8, potTopY - 7, C_PLANT);
+    tft.drawPixel(plantCX + 8, potTopY - 6, C_PLANT);
+    lastDripFrame = dripFrame;
   }
 }
 
@@ -3724,6 +3838,22 @@ void turnOffValveManual(int z) {
   } else {
     setWaterSourceRelays(false, false);   // mains OFF, tank OFF
   }
+
+  // Manual OFF path should also force a clean visual transition.
+  const bool manualOverlayActive =
+    (manualScreenUntilMs != 0 && (int32_t)(manualScreenUntilMs - millis()) > 0);
+
+  if (displayUseTft) {
+    tft.fillScreen(C_BG);
+    if (!manualOverlayActive) g_forceHomeReset = true;
+  } else {
+    display.clearDisplay();
+    display.display();
+  }
+
+  lastScreenRefresh = 0; // repaint immediately on next loop cycle
+  if (manualOverlayActive) drawManualSelection();
+  else HomeScreen();
 }
 
 // ---------- Next Water (queue-first) ----------
