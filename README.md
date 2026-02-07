@@ -34,6 +34,7 @@ Full-colour on-device interface showing:
 ### ESP32 + I²C OLED
 
 Compact, low-pin-count display ideal for small enclosures.
+Select screen type in setup. 
 
 ### ESP8266 + I²C LCD
 
