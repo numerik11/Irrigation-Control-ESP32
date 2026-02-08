@@ -585,20 +585,21 @@ static void handleSubmit() {
     key = "sm" + String(z);
     if (server.hasArg(key)) startMin[z] = clampInt(server.arg(key).toInt(), 0, 59);
 
-    key = "sh2_" + String(z);
-    if (server.hasArg(key)) startHour2[z] = clampInt(server.arg(key).toInt(), 0, 23);
-
-    key = "sm2_" + String(z);
-    if (server.hasArg(key)) startMin2[z] = clampInt(server.arg(key).toInt(), 0, 59);
-
     key = "dur" + String(z);
     if (server.hasArg(key)) durationMin[z] = clampInt(server.arg(key).toInt(), 0, 600);
 
-    key = "dur2_" + String(z);
-    if (server.hasArg(key)) duration2Min[z] = clampInt(server.arg(key).toInt(), 0, 600);
-
     key = "en2_" + String(z);
     enableStart2[z] = server.hasArg(key);
+    if (enableStart2[z]) {
+      key = "sh2_" + String(z);
+      if (server.hasArg(key)) startHour2[z] = clampInt(server.arg(key).toInt(), 0, 23);
+
+      key = "sm2_" + String(z);
+      if (server.hasArg(key)) startMin2[z] = clampInt(server.arg(key).toInt(), 0, 59);
+
+      key = "dur2_" + String(z);
+      if (server.hasArg(key)) duration2Min[z] = clampInt(server.arg(key).toInt(), 0, 600);
+    }
 
     for (int d = 0; d < 7; d++) {
       key = "d" + String(z) + "_" + String(d);
@@ -820,10 +821,19 @@ static void handleRoot() {
     html += F("<input type='number' min='0' max='59' name='sm"); html += String(z); html += F("' value='"); html += String(startMin[z]); html += F("'>");
     html += F("<label>Dur</label><input class='dur' type='number' min='0' max='600' name='dur"); html += String(z); html += F("' value='"); html += String(durationMin[z]); html += F("'></div>");
 
-    html += F("<div class='row'><label><input type='checkbox' name='en2_"); html += String(z); html += F("' "); html += (enableStart2[z] ? "checked" : ""); html += F("> Start 2</label>");
-    html += F("<input type='number' min='0' max='23' name='sh2_"); html += String(z); html += F("' value='"); html += String(startHour2[z]); html += F("'>");
-    html += F("<input type='number' min='0' max='59' name='sm2_"); html += String(z); html += F("' value='"); html += String(startMin2[z]); html += F("'>");
-    html += F("<label>Dur</label><input class='dur' type='number' min='0' max='600' name='dur2_"); html += String(z); html += F("' value='"); html += String(duration2Min[z]); html += F("'></div>");
+    html += F("<div class='row'><label><input type='checkbox' name='en2_"); html += String(z); html += F("' "); html += (enableStart2[z] ? "checked" : ""); html += F(" onchange='toggleStart2("); html += String(z); html += F(")'> Start 2</label>");
+    html += F("<span id='s2f-"); html += String(z); html += F("' style='display:");
+    html += (enableStart2[z] ? "inline-flex" : "none");
+    html += F(";gap:8px;align-items:center'>");
+    html += F("<input type='number' min='0' max='23' name='sh2_"); html += String(z); html += F("' value='"); html += String(startHour2[z]); html += F("'");
+    if (!enableStart2[z]) html += F(" disabled");
+    html += F(">");
+    html += F("<input type='number' min='0' max='59' name='sm2_"); html += String(z); html += F("' value='"); html += String(startMin2[z]); html += F("'");
+    if (!enableStart2[z]) html += F(" disabled");
+    html += F(">");
+    html += F("<label>Dur</label><input class='dur' type='number' min='0' max='600' name='dur2_"); html += String(z); html += F("' value='"); html += String(duration2Min[z]); html += F("'");
+    if (!enableStart2[z]) html += F(" disabled");
+    html += F("></span></div>");
 
     html += F("<div class='row'><label>Days</label><div class='days'>");
     const char* dn[7] = {"S", "M", "T", "W", "T", "F", "S"};
@@ -871,8 +881,9 @@ static void handleRoot() {
   html += F("const ZC="); html += String((unsigned)zonesCount); html += F(";");
   html += F("function pad(n){return n<10?'0'+n:n;}");
   html += F("function fmt(sec){sec=Math.max(0,sec|0);const m=(sec/60)|0;const s=sec%60;return m+'m '+pad(s)+'s';}");
+  html += F("function toggleStart2(z){const en=document.querySelector(\"input[name='en2_\"+z+\"']\");const h=document.querySelector(\"input[name='sh2_\"+z+\"']\");const m=document.querySelector(\"input[name='sm2_\"+z+\"']\");const d=document.querySelector(\"input[name='dur2_\"+z+\"']\");const f=document.getElementById('s2f-'+z);if(!en||!h||!m||!d||!f)return;const on=!!en.checked;h.disabled=!on;m.disabled=!on;d.disabled=!on;f.style.display=on?'inline-flex':'none';}");
   html += F("function drawClock(){const d=new Date(devEpoch*1000);const t=pad(d.getHours())+':'+pad(d.getMinutes())+':'+pad(d.getSeconds());const el=document.getElementById('clockVal');if(el)el.textContent=t;}");
-  html += F("setInterval(()=>{devEpoch++;drawClock();},1000);drawClock();");
+  html += F("setInterval(()=>{devEpoch++;drawClock();},1000);drawClock();for(let z=0;z<ZC;z++)toggleStart2(z);");
   html += F("async function refreshStatus(){try{const r=await fetch('/status');if(!r.ok)return;const st=await r.json();if(typeof st.deviceEpoch==='number')devEpoch=st.deviceEpoch;");
   html += F("if(st.weather){const w=st.weather||{};const ws=document.getElementById('wxState');const wt=document.getElementById('wxTemp');const ww=document.getElementById('wxWind');const wr=document.getElementById('wxRain');const wl=document.getElementById('wxLock');");
   html += F("if(ws){if(!w.enabled)ws.textContent='Off';else if(!w.valid)ws.textContent='Updating...';else ws.textContent='Live';}");
