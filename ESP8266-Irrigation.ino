@@ -943,6 +943,7 @@ static void handleSetupPage() {
   html += F("<div class='row'><label><input type='checkbox' name='wx_en' ");
   html += (weatherEnabled ? "checked" : "");
   html += F("> Enable Weather</label></div>");
+  html += F("<div class='row'><span class='help'>Open-Meteo docs: <a class='link' href='https://open-meteo.com/en/docs?latitude=-35.000&longitude=138.000' target='_blank' rel='noopener'>View API docs</a></span></div>");
   html += F("<div class='row'><label>Latitude</label><input type='number' name='wx_lat' min='-90' max='90' step='0.000001' value='");
   html += String(weatherLat, 6);
   html += F("'><label>Longitude</label><input type='number' name='wx_lon' min='-180' max='180' step='0.000001' value='");
