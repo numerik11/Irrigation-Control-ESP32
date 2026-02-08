@@ -55,7 +55,7 @@ Select screen type in setup.
 
 ### ESP8266 + I²C LCD
 
-Lightweight version using **16×2 LCD**.
+Lightweight verion using **16×2 LCD**.
 
 ---
 
