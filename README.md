@@ -41,7 +41,7 @@ Built for **reliability, flexibility, and real-world garden setups** — from sm
 
 ### ESP32 + 240×320 SPI TFT
 
-Full-colour on-device interface showing:
+Full-colour device interface showing:
 
 * System status
 * Active zones
@@ -157,12 +157,11 @@ Watering is **cancelled and logged** if blocked by:
 * Master off
 * Cooldown period
 
-Manual zone activation **respects the same safety rules**.
+Manual zone activation **respects the same rules**.
 
 ### Wind Delay Behaviour
 
-* Scheduled watering waits while wind exceeds threshold
-* Automatically resumes once wind drops below limit
+* Scheduled watering waits while wind exceeds threshold and resumes once wind drops below limit.
 
 ---
 
