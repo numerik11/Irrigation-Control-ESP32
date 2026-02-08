@@ -26,7 +26,7 @@ WiFiManager wifiManager;
 ESP8266WebServer server(80);
 
 // Defaults are safe for D1 mini while keeping I2C on D1/D2.
-int zonePins[MAX_ZONES] = {D0, D5, D6, D7, -1, -1};
+int zonePins[MAX_ZONES] = {12, 14, -1, -1, -1, -1};
 uint8_t zonesCount = 4; // allowed: 1..6
 
 String zoneNames[MAX_ZONES] = {
