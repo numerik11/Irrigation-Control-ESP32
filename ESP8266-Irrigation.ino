@@ -1,3 +1,11 @@
+// ===== Simplified WiFi Irrigation (ESP8266 + 16x2 I2C LCD) =====
+
+// - 4-6 zones
+// - Sequential run only (one zone at a time)
+// - Two start times/ duration per zone
+// - LittleFS internal save config + schedule persistence
+// - Weather display / Wind Delay / Cancel if Raining.
+
 #include <Arduino.h>
 #include <ArduinoOTA.h>
 #include <ArduinoJson.h>
@@ -12,12 +20,6 @@
 #include <Wire.h>
 #include <time.h>
 #include <math.h>
-
-// ===== Simplified WiFi Irrigation (ESP8266 + 16x2 I2C LCD) =====
-// - 4..6 zones
-// - Sequential run only (one zone at a time)
-// - Two start times per zone
-// - LittleFS config + schedule persistence
 
 static const uint8_t MAX_ZONES = 6;
 
