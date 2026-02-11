@@ -30,6 +30,7 @@
 #include <Adafruit_ST7789.h> // (Adafruit ST7735 and ST7789 Library)
 #include <Adafruit_NeoPixel.h>
 #include <math.h>
+#include "driver/gpio.h"
 extern "C" {
   #include "esp_log.h"
   #include "esp_wifi.h"
@@ -93,9 +94,9 @@ static int tftCsPin   = TFT_CS_DEFAULT;
 static int tftDcPin   = TFT_DC_DEFAULT;
 static int tftRstPin  = TFT_RST_DEFAULT;
 static int tftBlPin   = TFT_BL_DEFAULT;
+static uint8_t tftRotation = 3; // ST7789 rotation: 0..3
 
-SPIClass TFTSPI(SPI);
-Adafruit_ST7789 tft(&TFTSPI, -1, -1, -1);
+Adafruit_ST7789 tft(&SPI, -1, -1, -1);
 
 // ---------- OLED ----------
 #define SCREEN_ADDRESS 0x3C
@@ -173,8 +174,8 @@ int zonePins[MAX_ZONES] = {
   15, 16, 17, 18, 4, 5,  // defaults: first 4 use PCF, keep P4/P5 free for mains/tank
   6, 7, -1, -1, -1, -1, -1, -1, -1, -1   // spare slots up to 16
 };
-int mainsPin = 25;
-int tankPin  = 26;
+int mainsPin = 10;
+int tankPin  = 11;
 int tankLevelPin = 19; // ADC input (ESP32-S3: GPIO1..20 are ADC)
 
 const int LED_PIN  = -1;
@@ -821,6 +822,8 @@ static void mdnsStart() {
 }
 
 // ---------- GPIO fallback helpers ----------
+inline bool isValidOutputPin(int pin);
+
 inline int gpioLevel(bool on) {
   if (gpioActiveLow) {
     // Active-LOW: LOW = ON, HIGH = OFF
@@ -832,10 +835,7 @@ inline int gpioLevel(bool on) {
 }
 
 inline void gpioInitOutput(int pin) {
-  if (pin < 0 || pin > 39) return;
-  #if defined(CONFIG_IDF_TARGET_ESP32)
-  if (pin >= 6 && pin <= 11) return; // SPI flash/PSRAM pins on classic ESP32
-  #endif
+  if (!isValidOutputPin(pin)) return;
   pinMode(pin, OUTPUT);
   digitalWrite(pin, gpioLevel(false));  // ensure OFF
 }
@@ -843,20 +843,13 @@ inline void gpioInitOutput(int pin) {
 inline void gpioZoneWrite(int z, bool on) {
   if (z < 0 || z >= (int)MAX_ZONES) return;
   int pin = zonePins[z];
-  if (pin < 0 || pin > 39) return;
-  #if defined(CONFIG_IDF_TARGET_ESP32)
-  if (pin >= 6 && pin <= 11) return; // SPI flash/PSRAM pins on classic ESP32
-  #endif
+  if (!isValidOutputPin(pin)) return;
   digitalWrite(pin, gpioLevel(on));
 }
 
 inline void gpioSourceWrite(bool mainsOn, bool tankOn) {
-  bool mainsOk = (mainsPin >= 0 && mainsPin <= 39);
-  bool tankOk  = (tankPin  >= 0 && tankPin  <= 39);
-  #if defined(CONFIG_IDF_TARGET_ESP32)
-  if (mainsOk && mainsPin >= 6 && mainsPin <= 11) mainsOk = false;
-  if (tankOk  && tankPin  >= 6 && tankPin  <= 11) tankOk = false;
-  #endif
+  bool mainsOk = isValidOutputPin(mainsPin);
+  bool tankOk  = isValidOutputPin(tankPin);
   if (mainsOk) digitalWrite(mainsPin, gpioLevel(mainsOn));
   if (tankOk)  digitalWrite(tankPin,  gpioLevel(tankOn));
 }
@@ -898,15 +891,21 @@ inline bool isValidAdcPin(int pin) {
 }
 
 inline bool isValidGpioPin(int pin) {
+  if (pin < 0) return false;
+  if (!GPIO_IS_VALID_GPIO((gpio_num_t)pin)) return false;
   #if defined(CONFIG_IDF_TARGET_ESP32)
-  if (pin < 0 || pin > 39) return false;
-  if (pin >= 6 && pin <= 11) return false; // SPI flash/PSRAM pins
-  return true;
-  #elif defined(CONFIG_IDF_TARGET_ESP32S3)
-  return (pin >= 0 && pin <= 48);
-  #else
-  return (pin >= 0 && pin <= 48);
+  if (pin >= 6 && pin <= 11) return false; // SPI flash/PSRAM pins on classic ESP32
   #endif
+  return true;
+}
+
+inline bool isValidOutputPin(int pin) {
+  if (pin < 0) return false;
+  if (!GPIO_IS_VALID_OUTPUT_GPIO((gpio_num_t)pin)) return false;
+  #if defined(CONFIG_IDF_TARGET_ESP32)
+  if (pin >= 6 && pin <= 11) return false; // SPI flash/PSRAM pins on classic ESP32
+  #endif
+  return true;
 }
 
 inline bool isUnsafeTftPin(int pin) {
@@ -922,15 +921,18 @@ static void warnPinConflict(const char* aName, int aPin, const char* bName, int 
 
 static void sanitizePinConfig() {
   auto clampGpio = [](int &p) {
-    if (p < 0 || p > 39) p = -1;
+    if (p != -1 && !isValidGpioPin(p)) p = -1;
+  };
+  auto clampOutputGpio = [](int &p) {
+    if (p != -1 && !isValidOutputPin(p)) p = -1;
   };
 
   // Zone + source GPIOs
   for (uint8_t i = 0; i < MAX_ZONES; i++) {
-    clampGpio(zonePins[i]);
+    clampOutputGpio(zonePins[i]);
   }
-  clampGpio(mainsPin);
-  clampGpio(tankPin);
+  clampOutputGpio(mainsPin);
+  clampOutputGpio(tankPin);
 
   // Optional inputs
   clampGpio(rainSensorPin);
@@ -1271,13 +1273,13 @@ void setup() {
 
   // ---------- Display init ----------
   if (displayUseTft) {
-    new (&tft) Adafruit_ST7789(&TFTSPI, tftCsPin, tftDcPin, tftRstPin);
-    TFTSPI.begin(tftSclkPin, -1, tftMosiPin, tftCsPin);
+    new (&tft) Adafruit_ST7789(&SPI, tftCsPin, tftDcPin, tftRstPin);
+    SPI.begin(tftSclkPin, -1, tftMosiPin, tftCsPin);
 
     tftInitBacklightPwm();
 
     tft.init(TFT_W, TFT_H);
-    tft.setRotation(3);                 // try 0/1/2/3 if orientation is wrong
+    tft.setRotation(tftRotation);
     tft.fillScreen(ST77XX_BLACK);
     tft.setTextWrap(true);
     tft.setTextColor(ST77XX_WHITE);
@@ -4844,6 +4846,12 @@ void handleSetupPage() {
   html += F("<option value='oled'");
   html += (!displayUseTft ? " selected" : "");
   html += F(">OLED (SSD1306)</option></select><small>Applied after reboot</small></div>");
+  html += F("<div class='row'><label>TFT Rotation</label><select class='in-sm' name='tftRotation'>");
+  html += F("<option value='0'"); html += (tftRotation == 0 ? " selected" : ""); html += F(">0</option>");
+  html += F("<option value='1'"); html += (tftRotation == 1 ? " selected" : ""); html += F(">1</option>");
+  html += F("<option value='2'"); html += (tftRotation == 2 ? " selected" : ""); html += F(">2</option>");
+  html += F("<option value='3'"); html += (tftRotation == 3 ? " selected" : ""); html += F(">3</option>");
+  html += F("</select><small>ST7789 screen orientation (0-3)</small></div>");
   html += F("<div class='row switchline'><label>Auto Backlight (LDR)</label><input type='checkbox' name='photoAuto' ");
   html += (photoAutoEnabled ? "checked" : "");
   html += F("><small>Turn off TFT when it is dark</small></div>");
@@ -5412,11 +5420,11 @@ void loadConfig() {
   }
   if ((s = _safeReadLine(f)).length()) {
     int p = s.toInt();
-    if (p >= 0 && p <= 39) mainsPin = p;
+    if (isValidOutputPin(p)) mainsPin = p;
   }
   if ((s = _safeReadLine(f)).length()) {
     int p = s.toInt();
-    if (p >= 0 && p <= 39) tankPin  = p;
+    if (isValidOutputPin(p)) tankPin  = p;
   }
   if (f.available()) {
     if ((s = _safeReadLine(f)).length()) {
@@ -5509,6 +5517,15 @@ void loadConfig() {
   if (f.available()) { if ((s = _safeReadLine(f)).length()) { int p=s.toInt(); if (isValidGpioPin(p)) i2cSclPin = p; } }
   // NEW: display mode (optional trailing line)
   if (f.available()) { if ((s = _safeReadLine(f)).length()) displayUseTft = (s.toInt() == 1); }
+  // NEW: TFT rotation (optional trailing line)
+  if (f.available()) {
+    if ((s = _safeReadLine(f)).length()) {
+      int r = s.toInt();
+      if (r < 0) r = 0;
+      if (r > 3) r = 3;
+      tftRotation = (uint8_t)r;
+    }
+  }
 
   f.close();
 
@@ -5614,6 +5631,8 @@ void saveConfig() {
   f.println(i2cSclPin);
   // NEW: display mode (1=TFT, 0=OLED)
   f.println(displayUseTft ? 1 : 0);
+  // NEW: TFT rotation (0..3)
+  f.println((int)tftRotation);
 
   f.close();
 }
@@ -5687,6 +5706,7 @@ void handleConfigure() {
   int oldTftDc   = tftDcPin;
   int oldTftRst  = tftRstPin;
   int oldTftBl   = tftBlPin;
+  int oldTftRotation = tftRotation;
   int oldI2cSda  = i2cSdaPin;
   int oldI2cScl  = i2cSclPin;
   bool oldDisplayUseTft = displayUseTft;
@@ -5838,11 +5858,11 @@ void handleConfigure() {
   }
   if (server.hasArg("mainsPin")) {
     int p = server.arg("mainsPin").toInt();
-    if (p >= 0 && p <= 39) mainsPin = p;
+    if (isValidOutputPin(p)) mainsPin = p;
   }
   if (server.hasArg("tankPin")) {
     int p = server.arg("tankPin").toInt();
-    if (p >= 0 && p <= 39) tankPin = p;
+    if (isValidOutputPin(p)) tankPin = p;
   }
   if (server.hasArg("tankLevelPin")) {
     int p = server.arg("tankLevelPin").toInt();
@@ -5866,6 +5886,12 @@ void handleConfigure() {
     dm.toLowerCase();
     if (dm == "tft") displayUseTft = true;
     else if (dm == "oled") displayUseTft = false;
+  }
+  if (server.hasArg("tftRotation")) {
+    int r = server.arg("tftRotation").toInt();
+    if (r < 0) r = 0;
+    if (r > 3) r = 3;
+    tftRotation = (uint8_t)r;
   }
   // TFT SPI pins (apply on reboot)
   if (server.hasArg("tftSclk")) {
@@ -5951,12 +5977,16 @@ void handleConfigure() {
 
   bool i2cPinsChanged = (oldI2cSda != i2cSdaPin || oldI2cScl != i2cSclPin);
   bool displayModeChanged = (oldDisplayUseTft != displayUseTft);
+  bool tftRotationChanged = (oldTftRotation != (int)tftRotation);
 
   // Persist and re-apply runtime things
   validatePinMap();
   saveConfig();
   initManualButtons();
   initGpioPinsForZones();
+  if (!displayModeChanged && displayUseTft && tftRotationChanged) {
+    tft.setRotation(tftRotation);
+  }
 
   // --- NEW: if location/coords changed, force a weather refresh ---
   auto coordChanged = [](float a, float b) -> bool {
