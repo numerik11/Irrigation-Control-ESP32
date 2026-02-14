@@ -17,6 +17,7 @@ Built for **reliability, flexibility, and real-world garden setups** — from sm
 * **Weather Display**
 * **Optional TFT / OLED / LCD displays**
 * **ESP32/ESP32-S3 recommended (KC868-A6/A8 also supported)**
+* *If Wi‑Fi drops, watering logic runs locally and will try to reconnect. 
 
 ---
 
