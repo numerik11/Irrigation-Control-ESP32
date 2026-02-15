@@ -1077,6 +1077,7 @@ static const int TFT_PWM_CH = 7;      // LEDC channel for TFT BL
 static bool g_forceHomeReset = false; // force full HomeScreen repaint
 static bool g_forceRainReset = false; // force full RainScreen repaint
 static bool g_forceManualReset = false; // force full Manual screen repaint
+static bool g_forceRunReset = false; // force full Running screen repaint
 
 // ---------- LEDC PWM compatibility (ESP32 Arduino core 2.x vs 3.x) ----------
 #if defined(ESP_ARDUINO_VERSION_MAJOR) && (ESP_ARDUINO_VERSION_MAJOR >= 3)
@@ -1120,8 +1121,19 @@ static void tftInitBacklightPwm() {
 static inline void tftDisplay(bool on){
   if (!displayUseTft) return;
   if (g_tftDisplayOn == on) return;
-  tft.enableDisplay(on);
-  tft.enableSleep(!on);
+  if (on) {
+    // Sleep OUT then Display ON (common ST7789/ILI9341 sequence).
+    tft.sendCommand(0x11);
+    delay(120);
+    tft.sendCommand(0x29);
+    delay(20);
+  } else {
+    // Display OFF before Sleep IN to reduce panel power.
+    tft.sendCommand(0x28);
+    delay(10);
+    tft.sendCommand(0x10);
+    delay(120);
+  }
   g_tftDisplayOn = on;
 }
 
@@ -1135,15 +1147,17 @@ static inline void tftBacklight(bool on){
         warned = true;
       }
       tftBlPin = -1;
-      return;
+      // Continue and use panel sleep/wake commands.
     }
-    if (g_tftPwmReady) {
-      ledcWriteCompat(tftBlPin, on ? g_tftBrightness : 0);
-    } else {
-      pinMode(tftBlPin, OUTPUT);
-      digitalWrite(tftBlPin, on ? HIGH : LOW);   // most modules: HIGH = on
+    if (tftBlPin >= 0) {
+      if (g_tftPwmReady) {
+        ledcWriteCompat(tftBlPin, on ? g_tftBrightness : 0);
+      } else {
+        pinMode(tftBlPin, OUTPUT);
+        digitalWrite(tftBlPin, on ? HIGH : LOW);   // most modules: HIGH = on
+      }
+      g_tftBlOn = on;
     }
-    g_tftBlOn = on;
   }
   tftDisplay(on);
 }
@@ -1576,7 +1590,7 @@ void setup() {
     // NEW: actual rolling 24h rainfall
     doc["rain24hActual"] = last24hActualRain();
 
-    String out; serializeJson(doc, out);
+    String out; serializeJsonPretty(doc, out);
     server.send(200, "application/json", out);
   });
 
@@ -2630,7 +2644,7 @@ void toggleBacklight(){
 void updateLCDForZone(int zone) {
   static unsigned long lastUpdate=0; unsigned long now=millis();
   const unsigned long minUiInterval = displayUseTft ? 180UL : 1000UL;
-  if (now - lastUpdate < minUiInterval) return;
+  if (!g_forceRunReset && (now - lastUpdate < minUiInterval)) return;
   lastUpdate = now;
 
   unsigned long elapsed=(now - zoneStartMs[zone]) / 1000;
@@ -2661,133 +2675,132 @@ void updateLCDForZone(int zone) {
   const int W = tft.width();
   const int H = tft.height();
   const int pad = 8;
-  const int cardY = 44;
-  const int cardH = 128;
-  const int progCardY = 174;
-  const int progCardH = 52;
-  const int barX = pad + 12;
-  const int barY = 198;
-  const int barW = W - 2 * pad - 24;
+  const int infoY = 44;
+  const int infoH = 112;
+  const int statsY = infoY + infoH + 8;
+  const int statsH = 64;
+  const int meterY = statsY + statsH + 8;
+  int meterH = H - meterY - 8;
+  if (meterH < 58) meterH = 58;
+  const int barX = pad + 14;
+  const int barY = meterY + 28;
+  const int barW = W - (pad + 14) * 2;
   const int barH = 20;
+  const uint16_t C_RUN_INFO = RGB(20, 29, 47);
+  const uint16_t C_RUN_STATS = RGB(17, 25, 40);
+  const uint16_t C_RUN_METER = RGB(14, 21, 34);
+  const uint16_t C_LIVE = RGB(95, 182, 255);
 
   static bool runInit = false;
   static int lastZone = -1;
   static int lastW = -1, lastH = -1;
   static unsigned long lastElapsed = 0xFFFFFFFFUL;
   static unsigned long lastRemain = 0xFFFFFFFFUL;
+  static unsigned long lastTotal = 0xFFFFFFFFUL;
   static int lastPct = -1;
-  static int lastDripFrame = -1;
+  static int lastPulseFrame = -1;
 
-  bool layoutChanged = (!runInit || lastZone != zone || lastW != W || lastH != H);
+  bool layoutChanged = (g_forceRunReset || !runInit || lastZone != zone || lastW != W || lastH != H);
   if (layoutChanged) {
     tft.fillScreen(C_BG);
     drawTopBar("RUNNING", "LIVE", C_GOOD);
-    drawCard(pad, cardY, W - 2 * pad, cardH, C_PANEL, C_EDGE);
-    drawCard(pad, progCardY, W - 2 * pad, progCardH, C_PANEL, C_EDGE);
+    drawCard(pad, infoY, W - 2 * pad, infoH, C_RUN_INFO, C_EDGE);
+    drawCard(pad, statsY, W - 2 * pad, statsH, C_RUN_STATS, C_EDGE);
+    drawCard(pad, meterY, W - 2 * pad, meterH, C_RUN_METER, C_EDGE);
+    tft.drawFastHLine(pad + 1, infoY + 22, W - 2 * pad - 2, C_EDGE);
+    tft.drawFastHLine(pad + 1, statsY + 24, W - 2 * pad - 2, C_EDGE);
+    tft.drawFastHLine(pad + 1, meterY + 24, W - 2 * pad - 2, C_EDGE);
     tft.drawRect(barX, barY, barW, barH, C_EDGE);
+    for (int tick = 1; tick < 10; ++tick) {
+      int tx = barX + (tick * (barW - 2)) / 10;
+      tft.drawFastVLine(tx, barY + 2, barH - 4, RGB(44, 62, 90));
+    }
+    tft.setTextSize(1);
+    tft.setTextColor(C_MUTED);
+    tft.setCursor(pad + 10, infoY + 8);  tft.print("ACTIVE ZONE");
+    tft.setCursor(W - 78, infoY + 8);    tft.print("LIVE");
+    tft.setCursor(pad + 10, statsY + 8); tft.print("ELAPSED");
+    tft.setCursor(pad + 112, statsY + 8); tft.print("REMAIN");
+    tft.setCursor(pad + 10, meterY + 8); tft.print("FLOW PROGRESS");
     runInit = true;
     lastZone = zone;
     lastW = W;
     lastH = H;
     lastElapsed = 0xFFFFFFFFUL;
     lastRemain = 0xFFFFFFFFUL;
+    lastTotal = 0xFFFFFFFFUL;
     lastPct = -1;
-    lastDripFrame = -1;
+    lastPulseFrame = -1;
+    g_forceRunReset = false;
   }
 
-  tft.setTextColor(C_TEXT);
-  tft.setTextSize(2);
+  char elapsedBuf[8], remainBuf[8], totalBuf[8];
+  snprintf(elapsedBuf, sizeof(elapsedBuf), "%02lu:%02lu", em, es);
+  snprintf(remainBuf, sizeof(remainBuf), "%02lu:%02lu", rm, rs);
+  unsigned long tm = total / 60;
+  unsigned long ts = total % 60;
+  snprintf(totalBuf, sizeof(totalBuf), "%02lu:%02lu", tm, ts);
 
   if (layoutChanged || lastZone != zone) {
-    tft.fillRect(pad + 8, 56, W - 2 * pad - 16, 24, C_PANEL);
-    tft.setCursor(pad + 10, 58);
-    tft.print("Active: ");
+    tft.fillRect(pad + 10, infoY + 30, W - 2 * pad - 20, 28, C_RUN_INFO);
+    tft.setTextSize(2);
+    tft.setTextColor(C_TEXT);
+    tft.setCursor(pad + 12, infoY + 36);
+    tft.print("Z");
+    tft.print(zone + 1);
+    tft.print("  ");
     tft.print(zoneNames[zone]);
     lastZone = zone;
   }
 
-  if (layoutChanged || elapsed != lastElapsed) {
-    tft.fillRect(pad + 8, 86, W - 2 * pad - 16, 24, C_PANEL);
-    tft.setCursor(pad + 10, 88);
-    tft.print("Elapsed ");
-    if (em < 10) tft.print('0');
-    tft.print(em);
-    tft.print(":");
-    if (es < 10) tft.print('0');
-    tft.print(es);
+  if (layoutChanged || elapsed != lastElapsed || rem != lastRemain || total != lastTotal) {
+    tft.fillRect(pad + 10, statsY + 30, W - 2 * pad - 20, statsH - 38, C_RUN_STATS);
+    tft.setTextSize(2);
+    tft.setTextColor(C_ACCENT);
+    tft.setCursor(pad + 12, statsY + 34);
+    tft.print(elapsedBuf);
+    tft.setTextColor(C_GOOD);
+    tft.setCursor(pad + 116, statsY + 34);
+    tft.print(remainBuf);
+    tft.setTextSize(1);
+    tft.setTextColor(C_MUTED);
+    tft.setCursor(pad + 12, statsY + 52);
+    tft.print("TOTAL ");
+    tft.setTextColor(C_TEXT);
+    tft.print(totalBuf);
     lastElapsed = elapsed;
-  }
-
-  if (layoutChanged || rem != lastRemain) {
-    tft.fillRect(pad + 8, 114, W - 2 * pad - 16, 24, C_PANEL);
-    tft.setCursor(pad + 10, 116);
-    tft.print("Remaining ");
-    if (rm < 10) tft.print('0');
-    tft.print(rm);
-    tft.print(":");
-    if (rs < 10) tft.print('0');
-    tft.print(rs);
     lastRemain = rem;
+    lastTotal = total;
   }
 
   if (layoutChanged || pct != lastPct) {
-    tft.fillRect(pad + 8, 176, W - 2 * pad - 16, 20, C_PANEL);
+    tft.fillRect(pad + 10, meterY + 30, W - 2 * pad - 20, 22, C_RUN_METER);
     tft.setTextSize(2);
-    tft.setTextColor(C_ACCENT);
-    tft.setCursor(pad + 12, 176);
-    tft.print("Progress ");
+    tft.setTextColor(C_LIVE);
+    tft.setCursor(pad + 12, meterY + 34);
+    tft.print("Progress");
+    tft.setTextColor(C_TEXT);
+    tft.setCursor(W - 78, meterY + 34);
     tft.print(pct);
     tft.print("%");
 
     tft.fillRect(barX + 1, barY + 1, barW - 2, barH - 2, C_BG);
     int fillW = (pct * (barW - 2)) / 100;
-    if (fillW > 0) tft.fillRect(barX + 1, barY + 1, fillW, barH - 2, C_GOOD);
+    if (fillW > 0) {
+      tft.fillRect(barX + 1, barY + 1, fillW, barH - 2, C_GOOD);
+      if (fillW > 6) tft.fillRect(barX + 1, barY + 1, fillW - 4, 4, RGB(145, 234, 192));
+    }
     lastPct = pct;
   }
 
-  // Decorative blue drip animation in front of the run card.
-  // Drawn in a narrow strip to keep redraw cost low.
-  int dripFrame = (int)((now / 180UL) % 36UL);
-  if (layoutChanged || dripFrame != lastDripFrame) {
-    const uint16_t C_DRIP = RGB(95, 182, 255);
-    const uint16_t C_POT = RGB(168, 104, 66);
-    const uint16_t C_SOIL = RGB(86, 58, 40);
-    const uint16_t C_PLANT = RGB(76, 172, 92);
-    const int dropX[3] = { W - 53, W - 45, W - 38 };
-    const int dropR = 2;
-    const int plantCX = (dropX[0] + dropX[2]) / 2;
-    const int dripLeft = dropX[0] - dropR - 1;
-    const int dripRight = dropX[2] + dropR + 1;
-    const int iconLeft = plantCX - 10;
-    const int iconRight = plantCX + 10;
-    const int dripAreaX = (iconLeft < dripLeft) ? iconLeft : dripLeft;
-    const int dripAreaY = 54;
-    const int dripAreaW = ((iconRight > dripRight) ? iconRight : dripRight) - dripAreaX + 1;
-    const int dripAreaH = 92;
-    tft.fillRect(dripAreaX, dripAreaY, dripAreaW, dripAreaH, C_PANEL);
-
-    const int dropBaseY = 58;
-    for (int i = 0; i < 3; ++i) {
-      int p = (dripFrame + i * 12) % 36;
-      if (p < 24) {
-        int y = dropBaseY + p;
-        tft.fillCircle(dropX[i], y, dropR, C_DRIP);
-        tft.drawPixel(dropX[i], y - 3, C_DRIP);
-      }
-    }
-
-    // Simple plant-in-pot icon under the falling drops.
-    const int potTopY = dripAreaY + dripAreaH - 18;
-    for (int i = 0; i < 8; ++i) {
-      tft.drawFastHLine(plantCX - 8 + i, potTopY + i, 16 - (i * 2), C_POT);
-    }
-    tft.drawFastHLine(plantCX - 8, potTopY + 1, 16, C_SOIL);
-    tft.drawFastVLine(plantCX, potTopY - 10, 10, C_PLANT);
-    tft.fillCircle(plantCX - 5, potTopY - 7, 3, C_PLANT);
-    tft.fillCircle(plantCX + 5, potTopY - 6, 3, C_PLANT);
-    tft.drawPixel(plantCX - 8, potTopY - 7, C_PLANT);
-    tft.drawPixel(plantCX + 8, potTopY - 6, C_PLANT);
-    lastDripFrame = dripFrame;
+  int pulseFrame = (int)((now / 450UL) & 1UL);
+  if (layoutChanged || pulseFrame != lastPulseFrame) {
+    const int px = W - 26;
+    const int py = infoY + 12;
+    tft.fillRect(px - 7, py - 7, 20, 16, C_RUN_INFO);
+    tft.fillCircle(px, py, 4, pulseFrame ? C_GOOD : RGB(34, 60, 48));
+    tft.drawCircle(px, py, 6, C_EDGE);
+    lastPulseFrame = pulseFrame;
   }
 }
 
@@ -3713,6 +3726,7 @@ void turnOnZone(int z) {
   // Force a clean redraw immediately for TFT (no ON splash delay).
   if (displayUseTft) {
     g_forceHomeReset = true;
+    g_forceRunReset = true;
     tft.fillScreen(C_BG);
   }
   HomeScreen();
@@ -3763,7 +3777,10 @@ void turnOffZone(int z) {
     display.display();
     delay(350);
   }
-  if (displayUseTft) g_forceHomeReset = true;
+  if (displayUseTft) {
+    g_forceHomeReset = true;
+    g_forceRunReset = true;
+  }
 
   // Ensure the display returns to Home after showing the OFF banner
   HomeScreen();
@@ -3821,6 +3838,7 @@ void turnOnValveManual(int z) {
   // Manual starts are not logged
   manualScreenUntilMs = 0;  // leave zone-select overlay immediately
   g_forceManualReset = true;
+  g_forceRunReset = true;
   lastScreenRefresh = 0;
   if (displayUseTft) {
     tft.fillScreen(C_BG);
@@ -3870,6 +3888,7 @@ void turnOffValveManual(int z) {
 
   if (displayUseTft) {
     tft.fillScreen(C_BG);
+    g_forceRunReset = true;
     if (!manualOverlayActive) g_forceHomeReset = true;
   } else {
     display.clearDisplay();
@@ -3983,6 +4002,7 @@ void handleRoot() {
   html += F("<meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>");
   html += F("<title>ESP32 Irrigation</title>");
   html += F("<style>");
+  html += F("@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Sora:wght@400;600;700;800&display=swap');");
   html += F(".center{max-width:1280px;margin:0 auto}");
   html += F(":root[data-theme='light']{--bg:#ecf1f8;--bg2:#f6f8fc;--glass:rgba(255,255,255,.55);--glass-brd:rgba(140,158,190,.35);--panel:#fff;--line:#d5dfef;");
   html += F("--card:#ffffff;--ink:#0f172a;--muted:#667084;--primary:#1c74d9;--primary-2:#1160b6;--ok:#16a34a;--warn:#d97706;--bad:#dc2626;");
@@ -4102,6 +4122,25 @@ void handleRoot() {
   html += F(".card{padding:var(--pad-lg);}");
   html += F(".card h3{font-size:1.12rem;}");
   html += F("}");
+  html += F("html,body{font-family:'Sora','Avenir Next','Trebuchet MS',sans-serif}");
+  html += F("body{position:relative;min-height:100vh}");
+  html += F("body::before,body::after{content:'';position:fixed;z-index:-1;pointer-events:none;filter:blur(28px);opacity:.42}");
+  html += F("body::before{width:340px;height:340px;right:-120px;top:56px;background:radial-gradient(circle,#2f7fe0,transparent 68%);animation:floatbg 14s ease-in-out infinite}");
+  html += F("body::after{width:290px;height:290px;left:-110px;bottom:36px;background:radial-gradient(circle,#22c55e,transparent 66%);animation:floatbg 16s ease-in-out infinite reverse}");
+  html += F("@keyframes floatbg{0%,100%{transform:translateY(0)}50%{transform:translateY(-14px)}}");
+  html += F(".nav{border-bottom:1px solid rgba(255,255,255,.2);backdrop-filter:blur(7px);-webkit-backdrop-filter:blur(7px)}");
+  html += F(".brand span:last-child{text-transform:uppercase;letter-spacing:.8px;font-size:1.02rem}");
+  html += F(".pill,#btn-master{font-weight:700}");
+  html += F("#clock{font-family:'JetBrains Mono','Consolas',monospace;font-size:.84rem}");
+  html += F(".card{position:relative;overflow:hidden}");
+  html += F(".card::before{content:'';position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,var(--primary),#22c55e);opacity:.85}");
+  html += F(".zone-card{background:linear-gradient(155deg,var(--panel),rgba(47,127,224,.08))}");
+  html += F(".summary-grid .card{animation:rise .45s ease both}");
+  html += F(".summary-grid .card:nth-child(2){animation-delay:.05s}.summary-grid .card:nth-child(3){animation-delay:.1s}.summary-grid .card:nth-child(4){animation-delay:.15s}");
+  html += F("@keyframes rise{from{opacity:0;transform:translateY(10px)}to{opacity:1;transform:translateY(0)}}");
+  html += F(".btn{font-weight:760;letter-spacing:.15px}");
+  html += F(".chip b,.badge b{font-weight:800}");
+  html += F("@media(max-width:720px){.brand span:last-child{letter-spacing:.55px}.nav{padding-top:8px}.chip{font-size:.88rem}}");
   html += F("</style></head><body>");
   flush();
 
@@ -4611,6 +4650,7 @@ void handleSetupPage() {
   html += F("<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>");
   html += F("<title>Setup - ESP32 Irrigation</title>");
   html += F("<style>");
+  html += F("@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Sora:wght@400;600;700;800&display=swap');");
   html += F("body{margin:0;font-family:'Trebuchet MS','Candara','Segoe UI',sans-serif;background:#0e1726;color:#e8eef6;font-size:15px;line-height:1.4}");
   html += F(".wrap{max-width:1100px;margin:28px auto;padding:0 16px}");
   html += F("h1{margin:0 0 16px 0;font-size:1.7em;letter-spacing:.3px;font-weight:800}");
@@ -4708,6 +4748,25 @@ void handleSetupPage() {
   html += F("input[type=text],select{max-width:560px;}");
   html += F("input[type=number]{max-width:220px;}");
   html += F("}");
+  html += F("html,body{font-family:'Sora','Avenir Next','Trebuchet MS',sans-serif}");
+  html += F("body{position:relative;min-height:100vh;background:radial-gradient(900px 480px at 0% -10%,rgba(43,123,228,.2),transparent),radial-gradient(900px 500px at 110% 8%,rgba(34,197,94,.15),transparent),#0e1726}");
+  html += F(".page-head{padding:10px 14px;border-radius:15px;background:rgba(20,31,49,.45);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);border:1px solid rgba(135,157,194,.22)}");
+  html += F(".page-head h1{text-transform:uppercase;font-size:1.35rem;letter-spacing:1px}");
+  html += F(".theme-switch{font-size:.88rem}");
+  html += F(".card{position:relative;overflow:hidden}");
+  html += F(".card::before{content:'';position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,#2b7be4,#22c55e)}");
+  html += F("input[type=text],input[type=number],select{font-family:'Sora','Trebuchet MS',sans-serif}");
+  html += F("input[type=text]:focus-visible,input[type=number]:focus-visible,select:focus-visible{outline:2px solid #2b7be4;outline-offset:1px;box-shadow:0 0 0 3px rgba(43,123,228,.2)}");
+  html += F(".btn,.btn-alt{font-weight:760;letter-spacing:.16px}");
+  html += F(".chip{font-weight:620}");
+  html += F("details.collapse summary{display:flex;align-items:center;justify-content:space-between}");
+  html += F("details.collapse summary:after{content:'>';font-weight:700}");
+  html += F(".card{animation:rise .42s ease both}");
+  html += F(".card:nth-of-type(2){animation-delay:.04s}.card:nth-of-type(3){animation-delay:.08s}.card:nth-of-type(4){animation-delay:.12s}");
+  html += F("@keyframes rise{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}");
+  html += F("html[data-theme='light'] body{background:radial-gradient(900px 470px at 0% -10%,rgba(43,123,228,.18),transparent),radial-gradient(900px 450px at 110% 6%,rgba(22,163,74,.14),transparent),#f4f6fb}");
+  html += F("html[data-theme='light'] .page-head{background:rgba(255,255,255,.68);border-color:#d7e0ee}");
+  html += F("@media(max-width:760px){.page-head{padding:10px 12px}.page-head h1{font-size:1.2rem}}");
   html += F("</style></head><body>");
 
   html += F("<div class='wrap'><div class='page-head'><h1>Setup</h1>");
@@ -5257,22 +5316,25 @@ void handleLogPage() {
   html += F("<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>");
   html += F("<title>Event Log</title>");
   html += F("<style>");
-  html += F("body{font-family:'Trebuchet MS','Candara','Segoe UI',sans-serif;background:#0f1522;color:#e8eef6;margin:0;font-size:15px}");
-  html += F("header{background:#13213a;color:#fff;text-align:center;padding:18px 0 12px;font-size:1.3em}");
+  html += F("@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Sora:wght@400;600;700;800&display=swap');");
+  html += F("body{font-family:'Sora','Avenir Next','Trebuchet MS',sans-serif;background:radial-gradient(900px 500px at 10% -10%,rgba(43,123,228,.2),transparent),#0f1522;color:#e8eef6;margin:0;font-size:15px}");
+  html += F("header{background:linear-gradient(145deg,#163057,#13213a);border-bottom:1px solid #264067;color:#fff;text-align:center;padding:20px 0 14px;font-size:1.25em;font-weight:800;letter-spacing:.8px;text-transform:uppercase}");
   html += F(".wrap{max-width:1120px;margin:18px auto;padding:0 12px}");
-  html += F(".toolbar{margin:10px 0;display:flex;flex-wrap:wrap;gap:10px}");
-  html += F(".btn{padding:10px 14px;background:#1e2d4c;border-radius:12px;text-decoration:none;color:#fff;font-size:.95rem;border:none;cursor:pointer;display:inline-block}");
+  html += F(".toolbar{margin:12px 0;display:flex;flex-wrap:wrap;gap:10px}");
+  html += F(".btn{padding:10px 14px;background:linear-gradient(180deg,#2b7be4,#1f62c8);border-radius:12px;text-decoration:none;color:#fff;font-size:.95rem;border:1px solid rgba(0,0,0,.15);cursor:pointer;display:inline-block;font-weight:700}");
   html += F(".btn{transition:transform .06s ease,box-shadow .06s ease,filter .06s ease}");
   html += F(".btn:active{transform:translateY(1px);box-shadow:inset 0 2px 6px rgba(0,0,0,.25)}");
   html += F(".btn{position:relative;overflow:hidden}");
   html += F(".ripple{position:absolute;border-radius:999px;transform:scale(0);background:rgba(255,255,255,.35);animation:ripple .5s ease-out;pointer-events:none}");
   html += F("@keyframes ripple{to{transform:scale(3.2);opacity:0;}}");
-  html += F(".btn-danger{background:#b93b3b}.btn-warn{background:#a15517}");
-  html += F(".table-wrap{margin-top:10px;overflow-x:auto;border-radius:12px;border:1px solid #22314f}");
+  html += F(".btn-danger{background:linear-gradient(180deg,#ef4444,#b91c1c)}.btn-warn{background:linear-gradient(180deg,#d97706,#92400e)}");
+  html += F(".table-wrap{margin-top:10px;overflow-x:auto;border-radius:14px;border:1px solid #22314f;box-shadow:0 16px 34px rgba(0,0,0,.28)}");
   html += F("table{width:100%;border-collapse:collapse;background:#0b1220;min-width:760px}");
   html += F("th,td{border:1px solid #22314f;padding:8px 8px;font-size:.95em;text-align:left;white-space:nowrap}");
-  html += F("th{background:#172540;position:sticky;top:0;z-index:1}");
+  html += F("th{background:#172540;position:sticky;top:0;z-index:1;text-transform:uppercase;letter-spacing:.45px;font-size:.78rem}");
+  html += F("tr:nth-child(even) td{background:#0d1729}");
   html += F("td:last-child{white-space:normal;max-width:260px}");
+  html += F("td:first-child{font-family:'JetBrains Mono','Consolas',monospace;font-size:.82rem}");
   html += F("a{color:#a9cbff}");
   html += F("@media(max-width:760px){header{font-size:1.15em}.wrap{padding:0 6px}.btn{flex:1;text-align:center}}");
   html += F("</style></head><body>");
@@ -5290,6 +5352,9 @@ void handleLogPage() {
   html += F("<div class='table-wrap'><table><tr>");
   html += F("<th>Time</th><th>Zone</th><th>Event</th><th>Source</th><th>Rain Delay</th><th>Details</th></tr>");
 
+  String eventRows;
+  eventRows.reserve(7000);
+
   while (f.available()) {
     String line=f.readStringUntil('\n');
     if (line.length()<5) continue;
@@ -5300,6 +5365,7 @@ void handleLogPage() {
     String ts   = line.substring(0,i1);
     String zone = line.substring(i1+1,i2);
     String ev   = line.substring(i2+1,i3);
+    if (ev != "START" && ev != "STOPPED") continue;
     String src  = line.substring(i3+1,i4);
     String rd   = line.substring(i4+1,i5);
 
@@ -5313,14 +5379,20 @@ void handleLogPage() {
                       ? ("T="+temp+"C, H="+hum+"%, W="+wind+"m/s, "+cond+" @ "+city)
                       : "n/a");
 
-    html += F("<tr><td>"); html += ts;
-    html += F("</td><td>"); html += zone;
-    html += F("</td><td>"); html += ev;
-    html += F("</td><td>"); html += src;
-    html += F("</td><td>"); html += rd;
-    html += F("</td><td>"); html += details; html += F("</td></tr>");
+    String row;
+    row.reserve(220);
+    row += F("<tr><td>"); row += ts;
+    row += F("</td><td>"); row += zone;
+    row += F("</td><td>"); row += ev;
+    row += F("</td><td>"); row += src;
+    row += F("</td><td>"); row += rd;
+    row += F("</td><td>"); row += details; row += F("</td></tr>");
+
+    // Keep newest events at the top of the table.
+    eventRows = row + eventRows;
   }
   f.close();
+  html += eventRows;
 
   html += F("</table></div></div>");
   html += F("<script>");
@@ -5344,15 +5416,19 @@ void handleTankCalibration() {
   String html; html.reserve(2000);
   html += F("<!DOCTYPE html><html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>");
   html += F("<title>Tank Calibration</title>");
-  html += F("<style>body{font-family:'Trebuchet MS','Candara','Segoe UI',sans-serif;background:#0f1522;color:#e8eef6;margin:0;font-size:15px}");
-  html += F(".wrap{max-width:600px;margin:34px auto;padding:0 16px}.card{background:#0b1220;border:1px solid #22314f;border-radius:14px;padding:20px 16px}");
-  html += F("h2{margin:0 0 12px 0;font-size:1.4em;letter-spacing:.2px}");
-  html += F(".btn{background:#1976d2;color:#fff;border:none;border-radius:12px;padding:10px 16px;font-weight:600;cursor:pointer;font-size:.95rem}.row{display:flex;gap:12px;justify-content:space-between;margin-top:12px}");
+  html += F("<style>@import url('https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@500;700&family=Sora:wght@400;600;700;800&display=swap');");
+  html += F("body{font-family:'Sora','Avenir Next','Trebuchet MS',sans-serif;background:radial-gradient(900px 500px at 5% -10%,rgba(43,123,228,.2),transparent),#0f1522;color:#e8eef6;margin:0;font-size:15px}");
+  html += F(".wrap{max-width:620px;margin:34px auto;padding:0 16px}.card{background:#0b1220;border:1px solid #22314f;border-radius:16px;padding:20px 16px;box-shadow:0 18px 34px rgba(0,0,0,.28);position:relative;overflow:hidden}");
+  html += F(".card:before{content:'';position:absolute;left:0;right:0;top:0;height:3px;background:linear-gradient(90deg,#2b7be4,#22c55e)}");
+  html += F("h2{margin:0 0 12px 0;font-size:1.25em;letter-spacing:.8px;text-transform:uppercase}");
+  html += F("p b:first-child{font-family:'JetBrains Mono','Consolas',monospace}");
+  html += F(".btn{background:linear-gradient(180deg,#2b7be4,#1f62c8);color:#fff;border:1px solid rgba(0,0,0,.18);border-radius:12px;padding:10px 16px;font-weight:700;cursor:pointer;font-size:.95rem}.row{display:flex;gap:12px;justify-content:space-between;margin-top:12px;flex-wrap:wrap}");
   html += F(".btn{transition:transform .06s ease,box-shadow .06s ease,filter .06s ease}");
   html += F(".btn:active{transform:translateY(1px);box-shadow:inset 0 2px 6px rgba(0,0,0,.25)}");
   html += F(".btn{position:relative;overflow:hidden}");
   html += F(".ripple{position:absolute;border-radius:999px;transform:scale(0);background:rgba(255,255,255,.35);animation:ripple .5s ease-out;pointer-events:none}");
   html += F("@keyframes ripple{to{transform:scale(3.2);opacity:0;}}");
+  html += F("@media(max-width:600px){.btn{width:100%}.row form{flex:1 1 100%}}");
   html += F("a{color:#a9cbff}</style></head><body><div class='wrap'><h2>Tank Calibration</h2><div class='card'>");
 
   html += F("<p>Raw: <b>"); html += String(raw); html += F("</b></p>");
