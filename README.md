@@ -273,23 +273,26 @@ Download Kincony PCF8574 library:
 
 -Main Page
 
-<img width="641" height="919" alt="image" src="https://github.com/user-attachments/assets/fa40d71c-d27f-44aa-9ebd-2128cacf388c" />
+<img width="641" height="861" alt="image" src="https://github.com/user-attachments/assets/62d9235a-63a0-4b08-87ec-84083cffc012" />
 
 -Schedules 
 
-<img width="846" height="687" alt="image" src="https://github.com/user-attachments/assets/6393f64d-017c-4672-887b-5ffccd7a34d4" />
+<img width="843" height="740" alt="image" src="https://github.com/user-attachments/assets/386b1237-8e0a-4929-9fe3-afdad9de7794" />
 
 -Setup Page
 
-<img width="765" height="775" alt="image" src="https://github.com/user-attachments/assets/c02c13c2-0407-45e4-9973-79321f7280ac" />
-
+<img width="781" height="950" alt="image" src="https://github.com/user-attachments/assets/74aff9c1-217a-45f1-886e-4896cc582c94" />
 
 -KC868-A6 Wiring
 
 <img width="791" height="754" alt="Screenshot 2025-07-25 233726" src="https://github.com/user-attachments/assets/f601fb06-e70c-4fc6-a7f3-5fdf410b4e73" />
 
--Esp32 w/TFT 8 Relay Module 
+-Esp32 w/TFT 8 Relay 12v DC
 
 <img width="610" height="354" alt="image" src="https://github.com/user-attachments/assets/03cd3421-9d22-4272-9b58-5f9a08d18479" />
 
 <img width="403" height="249" alt="image" src="https://github.com/user-attachments/assets/63f053da-0656-4761-a37d-9579fe1d955f" />
+
+-Esp32-s3 w/TFT 6 Relay 24v AC 
+<img width="490" height="340" alt="image" src="https://github.com/user-attachments/assets/55f58a6f-606e-4aac-9061-a2c1fe721f88" />
+
